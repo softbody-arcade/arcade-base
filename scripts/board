@@ -19,11 +19,17 @@ refuse() { echo "$*" >&2; exit 1; }
 gh() { command gh "$@" || exit 2; }
 error() { echo "$*" >&2; exit 2; }
 if [[ $# == 1 && ( $1 == --help || $1 == -h ) ]]; then usage; exit 0; fi
+script_root=$(cd "$(dirname "$0")/.." && pwd -P)
+caller_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+[[ -z $caller_root ]] || caller_root=$(cd "$caller_root" && pwd -P)
+as_base=false
+if [[ -n $caller_root && $script_root == "$caller_root/base" && -f $caller_root/scripts/board.conf ]]; then as_base=true; fi
+if $as_base; then conf="$caller_root/scripts/board.conf"; else conf="$script_root/scripts/board.conf"; fi
 repo='' owner='' title=''
 while IFS= read -r line || [[ -n $line ]]; do
   [[ $line =~ ^(repo|owner|title)=([A-Za-z0-9._/\ -]+)$ ]] || error 'Invalid board.conf entry'
   printf -v "${BASH_REMATCH[1]}" '%s' "${BASH_REMATCH[2]}"
-done < "$(dirname "$0")/board.conf"
+done < "$conf"
 [[ -n $repo && -n $owner && -n $title ]] || error 'Missing board.conf setting'
 [[ $repo =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ && $owner =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ && $title =~ [[:alnum:]] ]] || error 'Invalid board.conf value'
 version=$(gh --version)
@@ -240,7 +246,13 @@ fi
 case "$cmd:${dry_run:-false}" in
  release:false|new:*|triage:*|effort:*|priority:*|move:*|start:*|result:*|decide:*|labels:*|parent:*|unparent:*|milestone:*|block:*|unblock:*)
   [[ $(git symbolic-ref --quiet --short HEAD) == develop ]] || refuse 'Board writes require the develop branch'
-  [[ $(git rev-parse --show-toplevel) == "$(cd "$(dirname "$0")/.." && pwd -P)" ]] || refuse 'Run the board script from its own checkout'
+  if $as_base; then
+    base_status=$(git submodule status -- base)
+    [[ ${base_status:0:1} == ' ' && -z $(git -C base status --porcelain --untracked-files=all) && $(git -C base rev-parse HEAD) == "$(git rev-parse HEAD:base)" ]] ||
+      refuse 'Board writes require base/ at its pinned commit'
+  else
+    [[ $caller_root == "$script_root" ]] || refuse 'Run the board script from its own checkout'
+  fi
   dirty=$(git status --porcelain --untracked-files=no)
   [[ -z $dirty ]] || refuse 'Board writes require a clean checkout'
   ;;

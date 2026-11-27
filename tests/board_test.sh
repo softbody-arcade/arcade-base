@@ -542,3 +542,29 @@ expect 0 '' labels
 echo >> scripts/board
 guard 'Board writes require a clean checkout' labels
 guard 'Board writes require a clean checkout' release
+git checkout -q scripts/board
+rm -f untracked
+game="$tmp/game"
+git init -qb develop "$game"
+mkdir -p "$game/scripts"
+printf 'repo=softbody-arcade/test-game\nowner=softbody-arcade\ntitle=Softbody Arcade\n' > "$game/scripts/board.conf"
+git -C "$game" -c protocol.file.allow=always submodule add -q "$tmp/repo" base
+git -C "$game" add scripts
+git -C "$game" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -qm game
+: > "$LOG"
+(cd "$game" && base/scripts/board labels) >"$tmp/out" 2>&1
+grep -q -- 'label create .* --repo softbody-arcade/test-game ' "$LOG" || { cat "$tmp/out" >&2; exit 1; }
+! grep -q -- '--repo softbody-arcade/arcade-base' "$LOG" || exit 1
+: > "$LOG"
+(cd "$tmp/repo" && scripts/board labels) >"$tmp/out" 2>&1
+grep -q -- 'label create .* --repo softbody-arcade/arcade-base ' "$LOG" || { cat "$tmp/out" >&2; exit 1; }
+git -C "$game/base" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -q --allow-empty -m moved
+if (cd "$game" && base/scripts/board labels) >"$tmp/out" 2>&1; then exit 1; fi
+grep -qx 'Board writes require a clean checkout' "$tmp/out" || grep -qx 'Board writes require base/ at its pinned commit' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+git -C "$game/base" reset -q --hard HEAD^
+echo edit >> "$game/base/scripts/board.conf"
+if (cd "$game" && base/scripts/board labels) >"$tmp/out" 2>&1; then exit 1; fi
+grep -qx 'Board writes require base/ at its pinned commit' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+git -C "$game/base" checkout -q scripts/board.conf
+: > "$LOG"
+(cd "$game" && base/scripts/board list) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
