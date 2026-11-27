@@ -28,6 +28,18 @@ Needed once game code moves here from Cops and Robbers (not used by any check ye
 
 The `docs/` folder is also an [Obsidian](https://obsidian.md) vault: open `docs/` with **Open folder as vault**. The shared `docs/.obsidian/app.json` keeps links in the plain Markdown format GitHub shows. Workspace layout, themes and plugins stay local.
 
+### One vault for every repo (optional)
+
+To read every repo's docs in one Obsidian vault, make a folder outside the checkouts with a link to each checkout's `docs/`, and open that folder as a vault:
+
+```sh
+mkdir -p ~/softbody-docs
+ln -s ~/Projects/beammp-arcade-base/docs ~/softbody-docs/arcade-base
+ln -s ~/Projects/beammp-cops-and-robbers/docs ~/softbody-docs/cops-and-robbers
+```
+
+Adjust the paths to where your checkouts are. Links inside each repo's docs keep working; links that leave a repo's `docs/` (to its README or source files) point outside the vault. Each repo's own `docs/` stays a vault of its own too.
+
 ## Releases
 
 The version lives in `VERSION`. Feature branches never change it. To release, run `make version V=x.y.z`: it builds the version commit on top of `origin/develop` (not your local branch), pushes it as `release/x.y.z` and opens the **Release x.y.z** PR into `main`, without touching your checkout. Merging that PR publishes the release, and the release workflow then opens a PR that merges `main` back into `develop`. For a hotfix, `make version V=x.y.z FROM=main` starts the release branch from `main` instead. A release is the tag and a GitHub Release with generated notes; it has no assets until the base ships a mod.
