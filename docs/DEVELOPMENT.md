@@ -23,6 +23,7 @@ Needed once game code moves here from Cops and Robbers (not used by any check ye
 
 - `make test` runs the tests of the privacy check, the board script, the doctor and the release scripts.
 - `make privacy` scans the tree for personal data and private server details.
+- CI's `links` job checks relative links and heading anchors in `AGENTS.md`, the root docs and `docs/` with [lychee](https://github.com/lycheeverse/lychee), offline. To run it locally, install lychee and run `lychee --offline --include-fragments AGENTS.md CONTRIBUTING.md README.md SECURITY.md docs`.
 - `make version V=x.y.z` starts a release (see below).
 - `make hooks` turns on the pre-push privacy check (once per clone, from a checkout of `develop` you trust).
 

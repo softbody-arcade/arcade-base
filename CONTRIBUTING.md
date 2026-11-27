@@ -29,7 +29,7 @@ The full rules, for people and for coding agents alike, are in [AGENTS.md](AGENT
 3. Follow the design, test and review rules in [AGENTS.md](AGENTS.md#design-and-implementation).
    - New features get a short spec and plan first.
    - Every change comes with tests where the result can be checked automatically.
-4. CI must be green: `test` and `privacy`.
+4. CI must be green: `test`, `privacy` and `links`.
 5. If players would see, hear or feel your change, say so in the pull request. The maintainer decides whether it needs a playtest before merging, or defers the check to an In-game check issue.
 
 ## Playtesting
