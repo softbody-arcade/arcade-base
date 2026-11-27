@@ -35,7 +35,7 @@ These would spoil the base even if the code worked:
 
 ## Decisions (the maintainer's)
 
-Recorded as comments on [#1](https://github.com/softbody-arcade/arcade-base/issues/1), in its Decided section, or as noted.
+Recorded as comments on [#1](https://github.com/softbody-arcade/arcade-base/issues/1), under its Constraints and known facts, or as noted.
 
 1. **The base runs the session; games are plugins that provide the game logic.** Rejected: the base as only a toolbox.
 2. **One server, one game at a time, switched without a restart.** Any player switches in the settings app between rounds, with no vote. A switch resets ready states, cancels a pending automatic next round and tells everyone. At server start the last-played game is active.
@@ -127,9 +127,10 @@ The base offers tools: spawn and place a car, pick one (random from the allowed 
 - Switching happens only in the lobby or results state, and not while the active game blocks it.
 - **Proposed start-up fallback:** on a fresh install, or when the last-played game is no longer installed or no longer compatible, the manager starts with the first compatible game by name and says why in the server log and the panel. With no compatible game it stays in the lobby, and the panel lists every installed game with the reason it was left out.
 - **Proposed:** the server decides the session number. Every round start, server-side round end and switch moves it on; a single client's error doesn't. Every message between manager, game and client carries it.
-- **Transitions come from the server:** a session-change message or a full snapshot from the server carries the new number and phase, and a client accepts it when its number is newer than the one it has, or equal for a snapshot. A replayed older snapshot or transition is ignored, so a client can't be rolled back. A joining or reconnecting player starts from the snapshot it gets.
+- **Transitions come from the server:** a session-change message or a full snapshot from the server carries the new number and phase, and a client accepts it when its number is newer than the one it has. Within a session, every message from the server also carries a sequence number that only goes up; a snapshot is accepted when its session is newer, or its session is the same and its sequence number is higher than the last one the client applied. A replayed older snapshot, transition or update is ignored, so a client can't be rolled back, also within a session (a lobby snapshot from before a player readied up can't undo the ready). A joining or reconnecting player starts from the snapshot it gets.
 - **Everything else must match:** a receiver acts on any other message only when its session number is the current one and the session is in a phase that accepts it (a GO only during the game's round, a settings save only in the lobby or results); the rest is dropped and logged. A late GO, vehicle acknowledgement or settings save then can't affect the lobby or the next game.
-- **BeamMP's own callbacks** (spawn, edit, delete, reset) carry no session number. The manager keeps the list of vehicles that belong to the current round (registered when the round spawns or assigns them, removed when the round ends). A callback can change game state only for a vehicle on that list; for one the manager is waiting on (a spawn it asked for, a rebuild it started) it completes that operation. A callback for any other vehicle, or where ownership is unclear, never reaches the game's scoring: the manager logs it and applies only its own rules (for example the spawn lock during a round). A late reset from round A therefore can't count as an illegal reset in round B.
+- **BeamMP's own callbacks** (spawn, edit, delete, reset) carry no session number. The manager keeps the list of vehicles that belong to the current round (registered when the round spawns or assigns them, removed when the round ends). A callback can change game state only for a vehicle on that list; for one the manager is waiting on (a spawn it asked for, a rebuild it started) it completes that operation. A callback for any other vehicle, or where ownership is unclear, never reaches the game's scoring: the manager logs it and applies only its own rules (for example the spawn lock during a round).
+- **Reused vehicle IDs.** BeamMP reuses free vehicle IDs ([Client.cpp, v3.9.3](https://github.com/BeamMP/BeamMP-Server/blob/v3.9.3/src/Client.cpp)), so a late callback from round A can carry the same player and vehicle ID as a car in round B. **Proposed:** a vehicle counts for a round only after the client has confirmed it for that round (a message with the round's session number, sent once the car is placed); until then, and for a short guard time after the round's start, the manager treats resets and edits of that vehicle as unclear and leaves them unscored. The plan sets the guard time from how late callbacks arrive in a probe. A late reset from round A therefore can't count as an illegal reset in round B, even with the same IDs.
 - On join or reconnect, a player gets a full snapshot of the current state.
 
 ### Failure and cleanup
@@ -197,9 +198,9 @@ Each is a probe on the local test server before the code depends on it:
 - Shared modules run under Lua 5.3 and LuaJIT.
 - A game whose manifest asks for another base version is left out, with the reason. Start-up picks the last-played game; on a fresh install, or when it's missing or incompatible, the first compatible game; with none, the lobby with every game's reason.
 - Late messages are dropped right after a round's cleanup as well as after a switch; native vehicle callbacks outside an expected operation go to the game only during its round.
-- A client-side game error puts only that player into spectating, leaves the session number unchanged, and another player's next message in the same round still goes through; the game gets that participant as lost (tested with a Cops and Robbers cop and with the runner). A server-side error ends the round for everyone.
-- A replayed older snapshot or transition can't roll a client back; a joining client takes the server's current session from its first snapshot.
-- A delayed reset from round A, delivered after round B has started, changes nothing in round B.
+- A client-side game error puts only that player into spectating and reaches the game as a lost participant, without the manager changing the session itself. Tested by role: when a Cops and Robbers cop's client fails, the chase goes on, the session number stays, and another player's next message in the same round still goes through; when the runner's client fails, the game ends the chase (or cancels the round in preparation), which is a server-side round end, so the session moves on and every player gets the cleanup. A server-side error ends the round for everyone.
+- A replayed older snapshot, transition or update can't roll a client back, across sessions and within one (a lobby snapshot from before a ready-up, replayed afterwards, changes nothing); a joining client takes the server's current session and sequence from its first snapshot.
+- A delayed reset from round A, delivered after round B has started and carrying the same player and vehicle IDs as a car in round B, changes nothing in round B.
 - Parity with Cops and Robbers 2.x: the leaderboard's filters, player and round detail views and "more rounds", How to play's current values, the panel's tabs and the HUD's change card.
 
 ## In-game checks
@@ -208,7 +209,7 @@ For the maintainer, after each step that changes what a player sees:
 
 - A full Cops and Robbers round, practice, and a late joiner spectating, with nothing different from the release before.
 - A switch to the test game and back: nothing left over (inputs, camera, sky, traffic, HUD).
-- A game error in the middle of a round: everyone back in the lobby with a notice (server side); one player spectating, the round going on (client side).
+- A game error in the middle of a round: everyone back in the lobby with a notice (server side); a cop's client: that player spectating, the chase going on; the runner's client: the chase ends for everyone, as when the runner disconnects today (client side).
 
 ## Choices left to the builder
 
