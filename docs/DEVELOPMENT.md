@@ -21,8 +21,13 @@ Needed once game code moves here from Cops and Robbers (not used by any check ye
 
 ## Checks
 
-- `make test` runs the tests of the privacy check, the board script and the doctor.
+- `make test` runs the tests of the privacy check, the board script, the doctor and the release scripts.
 - `make privacy` scans the tree for personal data and private server details.
+- `make version V=x.y.z` starts a release (see below).
 - `make hooks` turns on the pre-push privacy check (once per clone, from a checkout of `develop` you trust).
 
 The `docs/` folder is also an [Obsidian](https://obsidian.md) vault: open `docs/` with **Open folder as vault**. The shared `docs/.obsidian/app.json` keeps links in the plain Markdown format GitHub shows. Workspace layout, themes and plugins stay local.
+
+## Releases
+
+The version lives in `VERSION`. Feature branches never change it. To release, run `make version V=x.y.z`: it builds the version commit on top of `origin/develop` (not your local branch), pushes it as `release/x.y.z` and opens the **Release x.y.z** PR into `main`, without touching your checkout. Merging that PR publishes the release, and the release workflow then opens a PR that merges `main` back into `develop`. For a hotfix, `make version V=x.y.z FROM=main` starts the release branch from `main` instead. A release is the tag and a GitHub Release with generated notes; it has no assets until the base ships a mod.
