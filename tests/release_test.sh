@@ -343,11 +343,11 @@ check "publish refuses a version with a leading zero" '[[ $(cat "$tmp/status") =
 
 select_script="$tmp/select.sh"
 extract_select() {
-  awk '/^      - id: select$/ {found = 1} found && /^        run: \|$/ {inrun = 1; next} inrun && /^ *$/ {blank = blank "\n"; next} inrun && /^          / {printf "%s", blank; blank = ""; print substr($0, 11); next} inrun {exit}' "$1"
+  awk '/^      - id: select$/ {found = 1} found && /^        run: \|$/ {inrun = 1; next} inrun && /^ *$/ {blank = blank substr($0, 11) "\n"; next} inrun && /^          / {printf "%s", blank; blank = ""; print substr($0, 11); next} inrun {exit}' "$1"
 }
 extract_select "$ROOT/.github/workflows/release.yml" > "$select_script"
-printf '%s\n' '      - id: select' '        run: |' '          echo one' '' '          echo two' '      - id: next' '        run: echo three' > "$tmp/select-fixture.yml"
-check "the select extraction keeps lines after a blank line" '[[ $(extract_select "$tmp/select-fixture.yml") == $'"'"'echo one\n\necho two'"'"' ]]'
+printf '%s\n' '      - id: select' '        run: |' '          echo one' '' '            ' '          echo two' '      - id: next' '        run: echo three' > "$tmp/select-fixture.yml"
+check "the select extraction keeps blank lines and their spaces" '[[ $(extract_select "$tmp/select-fixture.yml") == $'"'"'echo one\n\n  \necho two'"'"' ]]'
 select_run() {
   set +e
   : > "$tmp/output"
