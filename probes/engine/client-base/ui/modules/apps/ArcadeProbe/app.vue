@@ -1,6 +1,9 @@
 <template>
   <div class="probe">
-    <div v-for="(value, key) in fields" :key="key">{{ key }}: {{ value }}</div>
+    <div :key="generation">
+      <div>redraw: {{ generation }}</div>
+      <div v-for="(value, key) in fields" :key="key">{{ key }}: {{ value }}</div>
+    </div>
     <button @click="pingGame">Ping game</button>
   </div>
 </template>
@@ -13,14 +16,15 @@ import { useBridge } from "@/bridge"
 const { api } = useBridge()
 const events = useEvents()
 const fields = ref({})
+const generation = ref(0)
 
 events.on("ArcadeProbe", data => {
   fields.value = { ...(data || {}) }
 })
 
 events.on("ArcadeProbeSnapshot", data => {
-  fields.value = {}
   fields.value = { ...(data || {}) }
+  generation.value += 1
 })
 
 function pingGame() {

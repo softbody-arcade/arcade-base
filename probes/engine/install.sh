@@ -30,7 +30,10 @@ done
 (($# == 1)) || usage
 root=$1
 [[ -d $root/Resources/Server && -d $root/Resources/Client ]] || { echo "not a test server: $root" >&2; exit 1; }
-root=$(cd "$root" && pwd)
+root=$(cd "$root" && pwd -P)
+for dir in Resources Resources/Server Resources/Client; do
+  [[ ! -L $root/$dir ]] || { echo "refusing a symlinked $dir in $root" >&2; exit 1; }
+done
 
 if $remove; then
   [[ -f $root/$record ]] || { echo "no probe record in $root" >&2; exit 1; }
@@ -49,9 +52,9 @@ if $remove; then
   exit 0
 fi
 
-[[ ! -e $root/$record ]] || { echo "probes already installed in $root" >&2; exit 1; }
+[[ ! -e $root/$record && ! -L $root/$record ]] || { echo "probes already installed in $root" >&2; exit 1; }
 for path in "${allowed[@]}"; do
-  [[ ! -e $root/$path ]] || { echo "already exists, not touching it: $path" >&2; exit 1; }
+  [[ ! -e $root/$path && ! -L $root/$path ]] || { echo "already exists, not touching it: $path" >&2; exit 1; }
 done
 
 created=()

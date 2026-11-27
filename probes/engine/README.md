@@ -26,7 +26,7 @@ probes/engine/install.sh <cops-and-robbers checkout>/.testserver
 
 `--no-game` leaves out the game client mod (probe 5 uses it). The installer refuses to touch a server that already has any probe path or an install record, and rolls back what it created if it fails or is stopped. Then restart the local BeamMP server and join.
 
-`make probes-check` checks the probes without a game: the collect test, the server Lua with `luac -p`, the client Lua with `luajit -bl`, and the installer and its test.
+`make probes-check` checks the probes without a game: the collect test, the server Lua with `luac -p`, the client Lua with `luajit -bl`, the version reading against BeamMP-style mod records, and the installer and its test.
 
 ## Probe 1: shared state
 
@@ -38,7 +38,7 @@ probes/engine/install.sh <cops-and-robbers checkout>/.testserver
 
 **Pass lines:**
 
-- `onInit inits=1 loads=1 registry=visible games=2`
+- exactly one `onInit` line after the start: `onInit inits=1 loads=1 registry=visible games=2`, and no `onInit inits=2` after it
 - `shared require agame ok=true hello=agame v1`
 - `shared require zgame ok=true hello=zgame v1`
 
@@ -58,18 +58,18 @@ The `base loaded … games=1` line before them is expected: folders load alphabe
 
 **Actions:** in chat, `/probe start` (note the round id and its rule game), then `/probe rule` (expect `rule ok=true value=<game> v1`). Then three cases, one at a time.
 
-BeamMP checks for changed files about every three seconds. After each change, wait for its reload line, at most 15 seconds, and any `onInit` line after it; then run `/probe state` and `/probe rule`. If no reload line appears within 15 seconds, record the case as inconclusive (no reload seen) and go on; a case only counts once its reload line was seen. If a case ended the round, run `/probe start` again before the next.
+BeamMP checks for changed files about every three seconds. After each change, wait for its reload line, at most 15 seconds, and any `onInit` line after it; then run `/probe state` and `/probe rule`. In (a) and (b), if no reload line appears within 15 seconds, record the case as inconclusive (no reload seen) and go on; those cases only count once their reload line was seen. In (c), run `/probe rule` and `/probe rule fresh` whether or not the reload line appeared: a missing `file changed` line is one of the outcomes this case decides. If a case ended the round, run `/probe start` again before the next.
 
 - **(a)** `touch` `Resources/Server/ArcadeProbeBase/main.lua`. Reload line: any new `base loaded` line, whatever its `loads` value (a fresh state starts again at 1).
 - **(b)** `touch` the round's game `entry.lua` (for example `Resources/Server/ArcadeProbeAGame/entry.lua`). Reload line: a new `entry <game> loaded`.
-- **(c)** Edit that game's `arcade_probe_<game>/rules.lua` to return `"<game> v2"`. Reload line: `file changed …rules.lua`, then `cache cleared arcade_probe_<game>.rules`. Then run `/probe rule` and `/probe rule fresh`.
+- **(c)** Edit that game's `arcade_probe_<game>/rules.lua` to return `"<game> v2"`. Reload line: `file changed …rules.lua`, then `cache cleared arcade_probe_<game>.rules`. Note whether they appeared, then run `/probe rule` and `/probe rule fresh`.
 
 Record for each case: the round id before and after, `inits` and `loads` from `/probe state`, and the version `/probe rule` returned.
 
 **Decides:**
 
 - (a) and (b), each with its reload line seen: the round id survives both → main path. It doesn't (`round=none`, or a new `loads=1`) → the spec's fallback: reloads end the round.
-- (c): the ordinary `/probe rule` returns `v2` with the round id unchanged → main path: the manager clears the module cache from `onFileChanged`. Still `v1` while `/probe rule fresh` gives `v2` → the event doesn't arrive or arrives too late, so nested edits need the manager's own reload; record it for the plan. Both `v1` → nested edits need a server restart.
+- (c): the `file changed` and `cache cleared` lines appeared and the ordinary `/probe rule` returns `v2` with the round id unchanged → main path: the manager clears the module cache from `onFileChanged`. No `file changed` line, or `/probe rule` still `v1`, while `/probe rule fresh` gives `v2` → the event doesn't arrive or arrives too late, so nested edits need the manager's own reload; record it for the plan. Both `v1` → nested edits need a server restart.
 
 ## Probe 3: extension load and unload
 
@@ -79,14 +79,14 @@ Record for each case: the round id before and after, `inits` and `loads` from `/
 
 **Actions:** one line at a time in the GE Lua console (`~`), and the app's **Ping game** button where named:
 
-1. `arcadeProbeBase.loadGame()` twice. Expect `load ok=true` both times, no error.
+1. `arcadeProbeBase.loadGame()` twice. Expect `load ok=true` both times, no error, and then a `game onUpdate n=…` line about once a second (the control: frame updates reach the loaded game).
 2. `arcadeProbeBase.ping()`, then **Ping game**. Expect exactly one `game ping n=…` and one `game ui ping n=…`.
 3. `arcadeProbeBase.unloadGame()`. Expect `game unloaded`, and no `game onUpdate` line in the next three seconds.
 4. `arcadeProbeBase.ping()`, then **Ping game**. Expect neither `game ping` nor `game ui ping`.
 5. `arcadeProbeBase.unloadGame()` again. Expect no error.
-6. `arcadeProbeBase.loadGame()`, then `arcadeProbeBase.ping()` and **Ping game**. Expect exactly one of each again.
+6. `arcadeProbeBase.loadGame()`. Expect `game onUpdate n=…` lines again, about once a second. Then `arcadeProbeBase.ping()` and **Ping game**: expect exactly one of each again.
 
-**Decides:** one, zero, one answer per trigger → main path. Any answer after unloading, or two per trigger after reloading → fallback: game extensions stay loaded and go dormant between rounds.
+**Decides:** `game onUpdate` lines while loaded, none after unloading, and again after reloading, with one, zero, one answer per trigger → main path. Any answer or `game onUpdate` line after unloading, or two per trigger after reloading → fallback: game extensions stay loaded and go dormant between rounds. No `game onUpdate` line in step 1 → the frame hook never reached the game, so step 3 proves nothing about updates; record it for the plan.
 
 ## Probe 4: app content
 
@@ -96,13 +96,13 @@ Record for each case: the round id before and after, `inits` and `loads` from `/
 
 **Actions:** in the GE Lua console:
 
-1. `arcadeProbeBase.show({game="A", extra="only in A"})`. The app shows game A and `only in A`.
+1. `arcadeProbeBase.show({game="A", extra="only in A"})`. The app shows `redraw: 0`, `game: A` and `extra: only in A`.
 2. `arcadeProbeBase.show({game="B"})`.
 
 **Decides:**
 
-- The app shows B without `extra`, with no client restart → main path.
-- `extra` is still shown → run `arcadeProbeBase.snapshot({game="B"})`. If that clears it → the spec's fallback: a full snapshot on every game switch. If not → a failure; record it for the plan.
+- The app shows `game: B` without `extra`, with no client restart → main path.
+- `extra` is still shown → run `arcadeProbeBase.snapshot({game="B"})`. A snapshot rebuilds the app's content from scratch, and `redraw` goes up by one. If that clears `extra` → the spec's fallback: a full snapshot on every game switch. If `redraw` went up and `extra` is still shown, or `redraw` didn't change → a failure; record it for the plan.
 
 ## Probe 5: versions
 
@@ -112,7 +112,7 @@ Record for each case: the round id before and after, `inits` and `loads` from `/
 
 **Actions:**
 
-1. Join. The server console shows `versions from <name>: {…}` with the mod manager's reading (`base`, `game`, `source`) and the packaged files' reading (`base_file`, `game_file`).
+1. Join. The server console shows `versions from <name>: {…}` with the mod manager's reading (`base`, `game`, `source`) and the packaged files' reading (`base_file`, `game_file`). The mod manager's reading counts a mod only when its record says it is active or mounted; a record that says neither shows as `unconfirmed <version>`, which doesn't count as installed. `beamng.log` has a `mod <name> as=<base|game> evidence=…` line per record it found.
 2. Leave the server. Run `probes/engine/install.sh --remove <test server>`, then `probes/engine/install.sh --no-game <test server>`, restart the server and join again. Expect game `missing` and base still `0.0.1`.
 
 **Decides:**

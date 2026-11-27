@@ -81,5 +81,31 @@ echo "Resources/Server/Other" >> "$dir/Resources/.arcade-probe-installed"
 if bash "$install" --remove "$dir" >/dev/null 2>&1; then rc=0; else rc=$?; fi
 check "a record naming another path refuses removal and deletes nothing" '[[ $rc == 1 ]] && probes_present "$dir" && others_intact "$dir"'
 
+dir=$(server linked)
+mkdir -p "$tmp/elsewhere/Server"
+rm -rf "$dir/Resources/Server"
+ln -s "$tmp/elsewhere/Server" "$dir/Resources/Server"
+if bash "$install" "$dir" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+check "a symlinked Resources/Server refuses the install" '[[ $rc == 1 && ! -e $tmp/elsewhere/Server/ArcadeProbeBase && ! -e $dir/Resources/.arcade-probe-installed ]]'
+
+dir=$(server repointed)
+bash "$install" "$dir" >/dev/null
+mkdir -p "$tmp/victim/Server/ArcadeProbeBase"
+printf keep > "$tmp/victim/Server/ArcadeProbeBase/marker"
+mv "$dir/Resources/Server" "$dir/Resources/Server.real"
+ln -s "$tmp/victim/Server" "$dir/Resources/Server"
+if bash "$install" --remove "$dir" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+check "a Resources/Server repointed after install refuses removal" '[[ $rc == 1 && $(cat "$tmp/victim/Server/ArcadeProbeBase/marker") == keep ]]'
+
+dir=$(server dangling)
+ln -s "$tmp/dangling-target" "$dir/Resources/.arcade-probe-installed"
+if bash "$install" "$dir" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+check "a dangling link at the record refuses the install" '[[ $rc == 1 && ! -e $tmp/dangling-target && ! -e $dir/Resources/Server/ArcadeProbeBase ]]'
+
+dir=$(server dangling-probe)
+ln -s "$tmp/dangling-probe-target" "$dir/Resources/Server/ArcadeProbeLoose"
+if bash "$install" "$dir" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+check "a dangling link at a probe path refuses the install and stays" '[[ $rc == 1 && -L $dir/Resources/Server/ArcadeProbeLoose && ! -e $dir/Resources/Server/ArcadeProbeBase ]]'
+
 if ((failures)); then echo "$failures install checks failed"; exit 1; fi
 echo "all install checks passed"

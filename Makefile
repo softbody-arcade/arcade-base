@@ -22,7 +22,8 @@ version:
 
 probes-check:
 	$$(command -v lua5.3 || command -v lua) probes/engine/tests/collect_test.lua
-	for f in $$(find probes/engine/server -name '*.lua'); do luac -p "$$f" || exit 1; done
+	luac=$$(command -v luac5.3 || command -v luac); for f in $$(find probes/engine/server -name '*.lua'); do "$$luac" -p "$$f" || exit 1; done
 	for f in $$(find probes/engine/client-base probes/engine/client-game -name '*.lua'); do luajit -bl "$$f" >/dev/null || exit 1; done
+	luajit probes/engine/tests/versions_test.lua
 	bash -n probes/engine/install.sh
 	bash probes/engine/tests/install_test.sh
