@@ -11,7 +11,7 @@ The starting point for every Softbody Arcade repo. Each repo keeps its own docs 
 
 ## Arcade Base (this repo)
 
-- [Development](DEVELOPMENT.md): prerequisites, checks and releases
+- [Development](DEVELOPMENT.md#no-such-heading): prerequisites, checks and releases
 - [Specs](superpowers/specs/) and [plans](superpowers/plans/) for each feature
 
 Outside this folder: [README](../README.md), [Contributing](../CONTRIBUTING.md) and [Security](../SECURITY.md).
