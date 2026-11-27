@@ -234,6 +234,23 @@ echo $? > "$tmp/status"
 set -e
 check "a first release works while main has no VERSION" '[[ $(cat "$tmp/status") == 0 && $(git -C "$work/../origin.git" show release/0.1.0:VERSION) == 0.1.0 ]]'
 
+work="$(fixture first-hotfix)"
+git -C "$work" rm -q VERSION
+git -C "$work" commit -qm "main before the first release"
+git -C "$work" push -q origin HEAD:main
+set +e
+(cd "$work" && RELEASE_FROM=main scripts/version.sh 0.1.0) > "$tmp/out" 2>&1
+echo $? > "$tmp/status"
+set -e
+check "a first release from main works while main has no VERSION" '[[ $(cat "$tmp/status") == 0 && $(git -C "$work/../origin.git" show release/0.1.0:VERSION) == 0.1.0 ]]'
+
+work="$(fixture no-develop-version)"
+git -C "$work" rm -q VERSION
+git -C "$work" commit -qm "develop without VERSION"
+git -C "$work" push -q origin HEAD:develop
+run_version "$work"
+check "a develop without VERSION is refused" '[[ $(cat "$tmp/status") == 1 ]] && grep -q "invalid current version" "$tmp/out" && ! git -C "$work/../origin.git" show-ref --verify --quiet refs/heads/release/1.1.0'
+
 work="$(fixture tagged)"
 git -C "$work" push -q origin HEAD:refs/tags/v1.1.0
 run_version "$work"
@@ -261,7 +278,7 @@ case "$*" in
     [[ ! -f $state/$ref ]] || exit 1
     mkdir -p "$state/$(dirname "$ref")"; echo "$sha" > "$state/$ref" ;;
   "release edit "*) echo false > "$state/draft" ;;
-  "release create "*) [[ " $* " == *" --verify-tag "* && -f $state/refs/tags/$3 ]] || exit 1; mkdir -p "$state/release"; echo false > "$state/draft"; echo false > "$state/pre"; echo "$*" > "$state/created" ;;
+  "release create "*) [[ " $* " == *" --verify-tag "* && -f $state/refs/tags/$3 ]] || exit 1; mkdir -p "$state/release"; echo false > "$state/draft"; echo false > "$state/pre"; printf '%s\n' "$@" > "$state/created" ;;
   "api --paginate repos/test/repo/milestones"*) echo 7 ;;
   "api --method PATCH repos/test/repo/milestones/7"*) touch "$state/milestone-closed" ;;
   *) exit 1 ;;
@@ -279,7 +296,7 @@ publish() {
 state="$pub/new"; mkdir -p "$state"
 publish "$state"
 check "publish tags the release commit" '[[ $(cat "$tmp/status") == 0 && $(cat "$state/refs/tags/v1.1.0") == "$sha" ]]'
-check "publish creates the release with its title and generated notes" 'grep -q -- "--title Arcade Base 1.1.0" "$state/created" && grep -q -- "--generate-notes" "$state/created"'
+check "publish creates the release with only its tag, title and generated notes" '[[ $(cat "$state/created") == $'"'"'release\ncreate\nv1.1.0\n--verify-tag\n--title\nArcade Base 1.1.0\n--generate-notes'"'"' ]]'
 check "publish closes the milestone" '[[ -f $state/milestone-closed ]]'
 
 state="$pub/moved"; mkdir -p "$state"; mkdir -p "$state/refs/tags"; echo "$other" > "$state/refs/tags/v1.1.0"
@@ -304,7 +321,11 @@ check "publish writes nothing when the tag lookup fails" '[[ $(cat "$tmp/status"
 
 state="$pub/draft"; mkdir -p "$state/release"; mkdir -p "$state/refs/tags"; echo "$sha" > "$state/refs/tags/v1.1.0"; echo true > "$state/draft"; echo false > "$state/pre"
 publish "$state"
-check "publish completes an existing draft" '[[ $(cat "$tmp/status") == 0 && $(cat "$state/draft") == false && -f $state/milestone-closed && ! -f $state/created ]]'
+check "publish refuses an existing draft" '[[ $(cat "$tmp/status") == 1 && $(cat "$state/draft") == true && ! -f $state/milestone-closed ]] && grep -q "is a draft" "$tmp/out" && ! grep -q "^release edit" "$state/log"'
+
+state="$pub/rerun"; mkdir -p "$state/release"; mkdir -p "$state/refs/tags"; echo "$sha" > "$state/refs/tags/v1.1.0"; echo false > "$state/draft"; echo false > "$state/pre"
+publish "$state"
+check "publish accepts its own published release on a rerun" '[[ $(cat "$tmp/status") == 0 && -f $state/milestone-closed && ! -f $state/created ]]'
 
 state="$pub/args"; mkdir -p "$state"
 set +e

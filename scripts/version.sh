@@ -61,14 +61,21 @@ lookup=$?
 set -e
 ((lookup != 0)) || refuse "$release already exists on origin"
 ((lookup == 2)) || refuse "could not check whether $release exists on origin"
-old="$(git show "$base:VERSION" 2>/dev/null || true)"
+main_version() {
+  if git cat-file -e "refs/remotes/origin/main:VERSION" 2>/dev/null; then
+    git show "refs/remotes/origin/main:VERSION"
+  else
+    echo 0.0.0
+  fi
+}
+if [[ "$from" == main ]]; then
+  old="$(main_version)"
+else
+  old="$(git show "$base:VERSION" 2>/dev/null || true)"
+fi
 [[ "$old" =~ $pattern ]] || refuse "invalid current version: $old"
 printf '%s\n' "$old" "$new" | sort -VCu || refuse "version must be greater than $old"
-if git cat-file -e "refs/remotes/origin/main:VERSION" 2>/dev/null; then
-  released="$(git show "refs/remotes/origin/main:VERSION")"
-else
-  released=0.0.0
-fi
+released="$(main_version)"
 [[ "$released" =~ $pattern ]] || refuse "invalid released version on main: $released"
 printf '%s\n' "$released" "$new" | sort -VCu || refuse "version must be greater than $released (the latest release on main)"
 set +e
@@ -86,7 +93,7 @@ export GIT_INDEX_FILE="$tmp/index"
 git read-tree "$base"
 mode="$(git ls-tree "$base" -- VERSION | cut -d' ' -f1)"
 blob="$(printf '%s\n' "$new" | git hash-object -w --stdin)"
-git update-index --cacheinfo "${mode:-100644},$blob,VERSION"
+git update-index --add --cacheinfo "${mode:-100644},$blob,VERSION"
 sign=()
 [[ "$(git config --type=bool commit.gpgsign || true)" != true ]] || sign=(-S)
 commit="$(git commit-tree "${sign[@]}" "$(git write-tree)" -p "$base" -m "chore: version $new")"

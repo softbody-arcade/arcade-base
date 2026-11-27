@@ -21,7 +21,7 @@ Needed once game code moves here from Cops and Robbers (not used by any check ye
 
 ## Checks
 
-- `make test` runs the tests of the privacy check, the board script and the doctor.
+- `make test` runs the tests of the privacy check, the board script, the doctor and the release scripts.
 - `make privacy` scans the tree for personal data and private server details.
 - `make version V=x.y.z` starts a release (see below).
 - `make hooks` turns on the pre-push privacy check (once per clone, from a checkout of `develop` you trust).

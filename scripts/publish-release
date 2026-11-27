@@ -20,6 +20,7 @@ state="$(gh api --paginate "repos/$GH_REPO/releases" \
 if [[ -n "$state" ]]; then
   read -r draft prerelease <<<"$state"
   [[ "$prerelease" == false ]] || refuse "$tag is a prerelease; fix it by hand"
+  [[ "$draft" == false ]] || refuse "$tag is a draft; fix it by hand"
 fi
 
 current="$(gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" \
@@ -31,9 +32,7 @@ else
   gh api --method POST "repos/$GH_REPO/git/refs" -f ref="refs/tags/$tag" -f sha="$sha" >/dev/null
 fi
 
-if [[ -n "$state" ]]; then
-  [[ "$draft" == false ]] || gh release edit "$tag" --draft=false
-else
+if [[ -z "$state" ]]; then
   gh release create "$tag" --verify-tag --title "Arcade Base $version" --generate-notes
 fi
 
