@@ -20,6 +20,6 @@
   "directive": "arcadeProbe",
   "vue": true,
   "category": "Gameplay",
-  "isAuxiliary": true,
+  "isAuxiliary": false,
   "interactive": "required"
 }
