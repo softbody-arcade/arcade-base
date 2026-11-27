@@ -38,7 +38,7 @@ ln -s ~/Projects/beammp-arcade-base/docs ~/softbody-docs/arcade-base
 ln -s ~/Projects/beammp-cops-and-robbers/docs ~/softbody-docs/cops-and-robbers
 ```
 
-Adjust the paths to where your checkouts are. Links inside each repo's docs keep working; links that leave a repo's `docs/` (to its README or source files) point outside the vault. Each repo's own `docs/` stays a vault of its own too.
+Add a `README.md` at the top of `~/softbody-docs` that says what the vault is: each folder links to a repo's `docs/`, `arcade-base/README.md` is the starting point, and edits change the checkouts, so they go through a branch and PR. Adjust the paths to where your checkouts are. Links inside each repo's docs keep working; links that leave a repo's `docs/` (to its README or source files) point outside the vault. Each repo's own `docs/` stays a vault of its own too.
 
 ## Releases
 
