@@ -2,76 +2,87 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A probe kit the maintainer installs on the local test server to answer the spec's five engine questions before the Cops and Robbers split starts.
+**Goal:** A probe kit the maintainer installs on the local test server to answer the spec's five engine questions, and decide between each main path and its fallback, before the Cops and Robbers split starts.
 
-**Architecture:** Throwaway server plugins and a client mod under `probes/engine/` in arcade-base, each logging tagged lines (`[arcade-probe]`) to the server log or `beamng.log`. An install script puts them on a test server and removes them again. Results go on arcade-base#1 as a comment and decide which of the spec's fallbacks apply.
+**Architecture:** Throwaway server plugins and two client mods under `probes/engine/` in arcade-base, each logging tagged lines (`[arcade-probe]`) to the server log or `beamng.log`. An install script puts them on a test server without touching anything already there, and removes exactly what it added. Results go on arcade-base#1 and decide which of the spec's fallbacks apply.
 
-**Tech Stack:** BeamMP Server 3.9.3 plugins (Lua 5.3), BeamNG.drive GE extensions (LuaJIT), a Vue UI app (same structure as Cops and Robbers' apps), Bash.
+**Tech Stack:** BeamMP Server 3.9.3 plugins (Lua 5.3), BeamNG.drive GE extensions (LuaJIT), a Vue UI app built like Cops and Robbers' apps, Bash.
 
-**Spec:** [2026-11-27-arcade-manager-design.md](../specs/2026-11-27-arcade-manager-design.md), section "Engine assumptions to check" and step 0 of "Order of work".
+**Spec:** [2026-11-27-arcade-manager-design.md](../specs/2026-11-27-arcade-manager-design.md), "Engine assumptions to check" and step 0 of "Order of work".
 
-This is the first of four plans the spec needs: engine probes (this one), the Cops and Robbers 2.x split (written once the probe results are in, since they decide which fallbacks the seam must allow), the manager moving into the base, and Cops and Robbers 3.0.0.
+This is the first of four plans the spec needs: engine probes (this one), the Cops and Robbers 2.x split (written once the results are in, since they decide which fallbacks the seam must allow), the manager moving into the base, and Cops and Robbers 3.0.0.
 
 ## Global Constraints
 
-- Server Lua runs under Lua 5.3 (BeamMP Server 3.9.3); client Lua under LuaJIT. Check every client file with `luajit -bl` and every server file with `luac -p`, using `lua5.3`/`luac5.3` when installed and `lua`/`luac` otherwise, as Cops and Robbers' Makefile does (the maintainer's machine has Lua 5.5; the server log in Task 4 is the real 5.3 check).
+- Server Lua runs under Lua 5.3 (BeamMP Server 3.9.3); client Lua under LuaJIT. Check client files with `luajit -bl <file> >/dev/null` (exit status 0 means valid; the listing on stdout is discarded) and server files with `luac -p`, using `lua5.3`/`luac5.3` when installed and `lua`/`luac` otherwise, as Cops and Robbers' Makefile does. The maintainer's machine has Lua 5.5; the server log in Task 4 is the real 5.3 check.
 - `PluginConfig.toml` holds one top-level key: `LuaStateID = "arcade-probe"` (BeamMP Server v3.9.3, `TLuaEngine::FindAndParseConfig`).
-- Plugin folders load in case-insensitive alphabetical order, and every folder sharing a state shares the one global `onInit`. Only the base probe defines `onInit`; game probes register into the global table `ArcadeProbeGames`.
-- Every log line starts with `[arcade-probe]` so the maintainer can grep it.
-- Probes never go on the live server. No source comments. No absolute home paths in committed files (privacy check).
-- Probe files are temporary: they live under `probes/engine/` and are deleted in the plan that follows once results are recorded.
+- Plugin folders load in case-insensitive alphabetical order; folders sharing a state share one global `onInit`. Only the base probe defines `onInit`; game probes register into the global table `ArcadeProbeGames`.
+- Every log line's message starts with `[arcade-probe]`.
+- The test server is given explicitly (`install.sh <test-server-dir>`), never derived from the probe checkout. Probes never go on the live server.
+- No source comments; no absolute home paths in committed files.
+- The probe files are temporary: they live under `probes/engine/` and are deleted in the first task of the next plan.
 
 ## Review Focus
 
-- A second load of the base probe's file (hot reload) must not duplicate manifests or lose the count of `onInit` calls: tested by `collect` being idempotent (Task 1).
-- A game folder that sorts before the base (`ArcadeProbeAGame`) must still be found: covered by having one game on each side of the base alphabetically (Task 1).
-- Uninstalling must leave the test server exactly as before: `install.sh --remove` deletes only the probe folders and zip (Task 3 test).
-- A client with an older or missing probe mod must still log something useful rather than erroring: the version dump logs `missing` (Task 2).
-- The base extension unloading the game extension twice, or loading it twice, must not error (Task 2 console steps).
+- The installer must never overwrite or delete anything that was on the test server before: it refuses collisions before its first write and removes only what its own record lists (Task 3 tests).
+- A reload must not lose an active round's state or leave a stale game rule running: Probe 2 checks both after reloading the base and a game separately (Task 1).
+- After unloading a game extension, none of its hooks or bindings may still answer, and after loading it again each trigger answers exactly once (Task 2).
+- A client without the game mod must still report the base's version and "game missing" to the server (Task 2).
+- If the games don't share the base's state, the explicit-path fallback must still be tested and reported (Task 1).
 
 ---
 
 ### Task 1: Server probes (probes 1 and 2, and probe 1's fallback)
 
 **Files:**
-- Create: `probes/engine/server/ArcadeProbeBase/PluginConfig.toml`, `probes/engine/server/ArcadeProbeBase/main.lua`, `probes/engine/server/ArcadeProbeBase/arcade_probe/collect.lua`
-- Create: `probes/engine/server/ArcadeProbeAGame/PluginConfig.toml`, `.../ArcadeProbeAGame/entry.lua`, `.../ArcadeProbeAGame/arcade_probe_agame/rules.lua`
-- Create: `probes/engine/server/ArcadeProbeZGame/PluginConfig.toml`, `.../ArcadeProbeZGame/entry.lua`, `.../ArcadeProbeZGame/arcade_probe_zgame/rules.lua`
-- Create: `probes/engine/server/ArcadeProbeLoose/arcade_probe_loose/rules.lua` (no top-level file, no `PluginConfig.toml`: the fallback)
+- Create: `probes/engine/server/ArcadeProbeBase/PluginConfig.toml`, `main.lua`, `arcade_probe/collect.lua`
+- Create: `probes/engine/server/ArcadeProbeAGame/PluginConfig.toml`, `entry.lua`, `arcade_probe_agame/rules.lua`
+- Create: `probes/engine/server/ArcadeProbeZGame/PluginConfig.toml`, `entry.lua`, `arcade_probe_zgame/rules.lua`
+- Create: `probes/engine/server/ArcadeProbeLoose/arcade_probe_loose/rules.lua` (no top-level file and no `PluginConfig.toml`: the fallback)
 - Test: `probes/engine/tests/collect_test.lua`
 
 **Interfaces:**
 - Produces: global `ArcadeProbeGames` = `{ [id] = { module = "<module name>", version = "<x.y.z>" } }`, written by each `entry.lua`.
-- Produces: `collect.lua` returns `{ collect = function(registry) -> list }`, the list sorted by id, each item `{ id, module, version }`; calling it twice on the same registry gives the same list.
-- Produces: each `rules.lua` returns `{ hello = function() -> string }` returning its game id.
+- Produces: `arcade_probe.collect` returns `{ collect = function(registry) -> list }`: items `{ id, module, version }` sorted by id; `nil` registry gives an empty list; calling it twice gives equal lists.
+- Produces: each `rules.lua` returns `{ hello = function() -> string }`, returning `"<id> v1"`.
+- Produces: chat commands handled by the base probe: `/probe start`, `/probe state`, `/probe rule`, `/probe rule fresh`, `/probe loose`, `/probe versions` (the last used by Task 2).
 
-- [ ] **Step 1: Write the failing test** `probes/engine/tests/collect_test.lua` (plain Lua 5.3, `package.path` pointing at `probes/engine/server/ArcadeProbeBase/?.lua`): `collect({ zgame = {module="a", version="1"}, agame = {module="b", version="2"} })` returns ids `{"agame","zgame"}` in that order; a second call returns an equal list; `collect({})` returns an empty list.
-- [ ] **Step 2: Run** `$(command -v lua5.3 || command -v lua) probes/engine/tests/collect_test.lua` — expect failure: module `arcade_probe.collect` not found.
-- [ ] **Step 3: Implement** `collect.lua`, then the plugin files:
-  - each `PluginConfig.toml`: `LuaStateID = "arcade-probe"`;
-  - each `entry.lua`: `ArcadeProbeGames = ArcadeProbeGames or {}` then its own entry (`agame`, `zgame`; module names `arcade_probe_agame.rules`, `arcade_probe_zgame.rules`; version `0.0.1`), and log `[arcade-probe] entry <id> loaded`;
-  - `main.lua`: keep `ArcadeProbeState = ArcadeProbeState or { inits = 0, loads = 0 }`, increment `loads` at file load and log it; define `onInit` that increments `inits`, logs `[arcade-probe] onInit inits=<n> loads=<n>`, then for each item from `collect(ArcadeProbeGames)` does `pcall(require, item.module)` and logs `[arcade-probe] require <id> ok=<bool> hello=<value or error>`; then the fallback: prepend `Resources/Server/ArcadeProbeLoose/?.lua` to `package.path`, `pcall(require, "arcade_probe_loose.rules")`, log `[arcade-probe] loose ok=<bool> hello=<value or error>`; finally log `[arcade-probe] package.path=<package.path>`.
-- [ ] **Step 4: Run** the test again — expect `collect ok`; run `luac -p` (or `luac5.3 -p`) on every server file — expect no output.
-- [ ] **Step 5: Commit** `probes: server plugins for shared state, require and reload`.
+- [ ] **Step 1: Write the failing test** `collect_test.lua`: `collect({ zgame = {module="a", version="1"}, agame = {module="b", version="2"} })` gives ids `{"agame","zgame"}`; a second call gives an equal list; `collect(nil)` and `collect({})` give `{}`.
+- [ ] **Step 2: Run** `$(command -v lua5.3 || command -v lua) probes/engine/tests/collect_test.lua` from the repo root — expect failure: module `arcade_probe.collect` not found.
+- [ ] **Step 3: Implement** `collect.lua`.
+- [ ] **Step 4: Implement** the plugin files:
+  - every `PluginConfig.toml`: `LuaStateID = "arcade-probe"`;
+  - each `entry.lua`: `ArcadeProbeGames = ArcadeProbeGames or {}`, its own entry (`agame` → `arcade_probe_agame.rules`, `zgame` → `arcade_probe_zgame.rules`, version `0.0.1`), and a log line `[arcade-probe] entry <id> loaded`;
+  - `main.lua`, at file load (before and independent of `onInit`): `ArcadeProbeState = ArcadeProbeState or { inits = 0, loads = 0, round = nil }`, increment `loads`, log `[arcade-probe] base loaded loads=<n> registry=<visible|nil> games=<count>`; then run the loose check (below) once, so it reports even if `onInit` never fires or the registry is missing;
+  - the loose check: prepend `Resources/Server/ArcadeProbeLoose/?.lua` to `package.path`, `pcall(require, "arcade_probe_loose.rules")`, log `[arcade-probe] loose ok=<bool> hello=<value or error>`;
+  - `onInit`: increment `inits`, log `[arcade-probe] onInit inits=<n> loads=<n>`, then for each item of `collect(ArcadeProbeGames)` log `[arcade-probe] shared require <id> ok=<bool> hello=<value or error>`, and finally `[arcade-probe] package.path=<package.path>`;
+  - chat commands (registered with `MP.RegisterEvent("onChatMessage", ...)`, returning 1 to hide them): `/probe start` sets `ArcadeProbeState.round = { id = <os.time()>, rule = <first game id> }` and logs it; `/probe state` logs the round (or `none`) and `inits`/`loads`; `/probe rule` calls `require(<module of round.rule>).hello()` and logs the result; `/probe rule fresh` does the same after `package.loaded[<module>] = nil`; `/probe loose` re-runs the loose check.
+- [ ] **Step 5: Run** the collect test — expect it to pass; run `luac -p` (or `luac5.3 -p`) on every server file — expect exit status 0.
+- [ ] **Step 6: Commit** `probes: server plugins for shared state, loading and reload`.
 
 ### Task 2: Client probes (probes 3, 4 and 5)
 
 **Files:**
-- Create: `probes/engine/client/scripts/arcadeProbe/modScript.lua` (`load("arcadeProbeBase")`, `setExtensionUnloadMode("arcadeProbeBase", "manual")`, as Cops and Robbers' `client/scripts/copsAndRobbers/modScript.lua`)
-- Create: `probes/engine/client/mod_info/ArcadeProbe/info.json` (`"version_string": "0.0.1"`)
-- Create: `probes/engine/client/lua/ge/extensions/arcadeProbeBase.lua`, `probes/engine/client/lua/ge/extensions/arcadeProbeGame.lua`
-- Create: `probes/engine/client/ui/modules/apps/ArcadeProbe/app.json`, `app.vue` (copy the structure of Cops and Robbers' `CopsAndRobbersAnnouncements` app: `domElement`, `directive`, one component)
+- Create the base mod under `probes/engine/client-base/`: `scripts/arcadeProbe/modScript.lua` (`load("arcadeProbeBase")`, `setExtensionUnloadMode("arcadeProbeBase", "manual")`, as Cops and Robbers' `client/scripts/copsAndRobbers/modScript.lua`), `mod_info/ArcadeProbe/info.json` (`"version_string": "0.0.1"`), `lua/ge/extensions/arcadeProbeBase.lua`, `ui/modules/apps/ArcadeProbe/app.json` and `app.vue` (built like `client/ui/modules/apps/CopsAndRobbersAnnouncements/` in Cops and Robbers).
+- Create the game mod under `probes/engine/client-game/`: `mod_info/ArcadeProbeGame/info.json` (`"version_string": "0.0.2"`) and `lua/ge/extensions/arcadeProbeGame.lua` (no modScript: the base loads it).
+- Modify: `probes/engine/server/ArcadeProbeBase/main.lua` (receive the version report)
 
 **Interfaces:**
-- Produces (console API on `arcadeProbeBase`): `loadGame(name)`, `unloadGame(name)`, `show(text)`, `versions()`.
-- Produces: `arcadeProbeGame` logs `[arcade-probe] game onUpdate n=<count>` once per second while loaded, and `[arcade-probe] game unloaded` from `onExtensionUnloaded`.
-- Produces: the app listens for the guihook `ArcadeProbe` and shows `data.text`.
+- Produces (GE console API on `arcadeProbeBase`): `loadGame()`, `unloadGame()`, `ping()`, `show(fields)`, `snapshot(fields)`, `versions()`.
+- Produces: `arcadeProbeGame` logs `[arcade-probe] game onUpdate n=<count>` once a second while loaded; its `onArcadeProbePing` hook logs `[arcade-probe] game ping n=<count>`; `onExtensionUnloaded` logs `[arcade-probe] game unloaded`.
+- Produces: client-to-server event `arcadeProbeVersions` with a JSON body `{ base = "<version or missing>", game = "<version or missing>", source = "<api used>" }`; the server base logs `[arcade-probe] versions from <player name>: <body>`.
 
-- [ ] **Step 1: Implement** `arcadeProbeGame.lua`: an `onUpdate` that counts frames and logs once a second; `onExtensionUnloaded` logs.
-- [ ] **Step 2: Implement** `arcadeProbeBase.lua`: `loadGame(name)` calls `extensions.load(name)` and logs `[arcade-probe] load <name> ok=<bool>`; `unloadGame(name)` calls `extensions.unload(name)` and logs; `show(text)` calls `guihooks.trigger("ArcadeProbe", { text = text })`; `versions()` logs, for each entry the mod manager reports (`core_modmanager`), its name and version, or `[arcade-probe] versions missing <reason>` when the API isn't there (the probe's job is to find the right call: log the keys `core_modmanager` exposes first).
-- [ ] **Step 3: Implement** the app: on `ArcadeProbe` it replaces its text; on mount it logs `[arcade-probe] app mounted` through `bngApi.engineLua('log("I","arcade-probe","app mounted")')`.
-- [ ] **Step 4: Run** `luajit -bl` on both extensions — expect no output; check `app.json` with `python3 -m json.tool`.
-- [ ] **Step 5: Commit** `probes: client extensions and app for load, unload, content and versions`.
+- [ ] **Step 1: Implement** `arcadeProbeGame.lua`: the frame counter in `onUpdate` and the `onArcadeProbePing` hook as above.
+- [ ] **Step 2: Implement** `arcadeProbeBase.lua`:
+  - `loadGame()` and `unloadGame()` call `extensions.load("arcadeProbeGame")` / `extensions.unload("arcadeProbeGame")` and log `[arcade-probe] load ok=<bool>` / `[arcade-probe] unload`; calling either twice in a row must not error.
+  - `ping()` calls `extensions.hook("onArcadeProbePing")` and logs `[arcade-probe] ping sent`.
+  - `show(fields)` sends `guihooks.trigger("ArcadeProbe", fields)`; `snapshot(fields)` sends `guihooks.trigger("ArcadeProbeSnapshot", fields)`.
+  - `versions()`: discovery first: log `[arcade-probe] modmanager keys=<sorted list of the keys core_modmanager exposes, or missing>`; then for each function key whose name starts with `get` and that takes no arguments, `pcall` it and log the key, the result type and, for tables, the count. From the first result that lists mods, read the `ArcadeProbe` and `ArcadeProbeGame` entries' versions (logging which fields held them), then send `arcadeProbeVersions` with `TriggerServerEvent` (as Cops and Robbers' `copsAndRobbers/game.lua` does) and log what was sent. If no API lists mods, send `source = "none"` with both versions `missing`.
+  - Call `versions()` once when the world is ready (`onWorldReadyState` with state 2, as Cops and Robbers does).
+- [ ] **Step 3: Implement** the app: it keeps one `fields` object; on `ArcadeProbe` it merges the new fields into it (`Object.assign`); on `ArcadeProbeSnapshot` it replaces it entirely; it shows every key and value. On mount it calls, through the bridge Cops and Robbers' `copsAndRobbers/hud.js` uses (`useBridge().api.engineLua`), `log("I", "arcadeProbe", "[arcade-probe] app mounted")`.
+- [ ] **Step 4: Implement** the server side in `main.lua`: `MP.RegisterEvent("arcadeProbeVersions", ...)` logging the player name and body; `/probe versions` logs how many reports have arrived.
+- [ ] **Step 5: Run** `luajit -bl <file> >/dev/null` on `modScript.lua` and both extensions — expect exit status 0; `luac -p` on `main.lua`; `python3 -m json.tool` on `app.json` and both `info.json`.
+- [ ] **Step 6: Commit** `probes: client mods for load, unload, hooks, app content and versions`.
 
 ### Task 3: Install script, check target and run sheet
 
@@ -82,18 +93,30 @@ This is the first of four plans the spec needs: engine probes (this one), the Co
 
 **Interfaces:**
 - Consumes: the folders from Tasks 1 and 2.
-- Produces: `probes/engine/install.sh <test-server-dir>` copies the four server folders to `<dir>/Resources/Server/` and zips `probes/engine/client/` to `<dir>/Resources/Client/ArcadeProbe.zip`; `install.sh --remove <dir>` deletes exactly those; it refuses a directory without `Resources/Server`.
-- Produces: `make probes-check` runs the collect test and `luac -p` on server files (5.3 versions when installed, as in Global Constraints), `luajit -bl` on client files, `bash -n` on the script, and the install test.
+- Produces: `install.sh [--no-game] <test-server-dir>`: refuses (exit 1, nothing written) if the directory has no `Resources/Server` or `Resources/Client`, if any of `Resources/Server/ArcadeProbeBase`, `ArcadeProbeAGame`, `ArcadeProbeZGame`, `ArcadeProbeLoose`, `Resources/Client/ArcadeProbe.zip` or `ArcadeProbeGame.zip` already exists, or if a record file `Resources/.arcade-probe-installed` exists. Otherwise it copies the four server folders, zips `client-base/` to `ArcadeProbe.zip` and (without `--no-game`) `client-game/` to `ArcadeProbeGame.zip`, and writes every created path, one per line, to the record file.
+- Produces: `install.sh --remove <test-server-dir>` deletes exactly the paths in the record file and then the record file; without a record file it exits 1 and deletes nothing.
+- Produces: `make probes-check` runs the collect test, `luac -p` on the server files, `luajit -bl … >/dev/null` on the client Lua, `bash -n` on `install.sh`, and the install test.
 
-- [ ] **Step 1: Write the failing test** `install_test.sh`: in a temp dir with `Resources/Server/Other/` and `Resources/Client/other.zip`, install then check the four probe folders and `ArcadeProbe.zip` exist; `--remove` then check they're gone and `Other/` and `other.zip` remain; a dir without `Resources/Server` makes `install.sh` exit 1.
+- [ ] **Step 1: Write the failing test** `install_test.sh`, in temp directories:
+  - a server dir with `Resources/Server/Other/` and `Resources/Client/other.zip`: install, then check the four probe folders, both zips and the record exist; `--remove`, then check they're gone and `Other/`, `other.zip` remain;
+  - `--no-game`: only `ArcadeProbe.zip` is created, and `--remove` works;
+  - a pre-existing `Resources/Server/ArcadeProbeBase/` with a marker file, and separately a pre-existing `Resources/Client/ArcadeProbe.zip`: install exits 1 and writes nothing (no record), and a following `--remove` exits 1; the marker file and the zip are unchanged;
+  - a directory without `Resources/Server`: install exits 1.
 - [ ] **Step 2: Run** `bash probes/engine/tests/install_test.sh` — expect failure: `install.sh` missing.
-- [ ] **Step 3: Implement** `install.sh` (`set -euo pipefail`, zip with `cd probes/engine/client && zip -qr`), the `probes-check` target, and `README.md` with one section per probe: setup, the action (server restart, a hot reload by touching `ArcadeProbeBase/main.lua`, one comment-free GE console line per client action, such as `arcadeProbeBase.loadGame("arcadeProbeGame")`), the log lines that mean pass, the uncertainty it resolves, and the spec fallback that applies if it fails. Probe 2's pass condition: after the touch, `onInit inits` goes up by one, `loads` goes up by one, and each game is required once more without errors.
-- [ ] **Step 4: Run** `make probes-check` — expect every part to pass; run `make test` — expect it unchanged.
-- [ ] **Step 5: Commit** `probes: install script, check target and run sheet`.
+- [ ] **Step 3: Implement** `install.sh` (`set -euo pipefail`; all collision checks before the first write; zip from inside each client folder with `zip -qr`), the `probes-check` target, and `README.md`.
+- [ ] **Step 4: Write** `README.md`, one section per probe, each with: setup, the actions (chat commands, or one comment-free GE console line each), the `[arcade-probe]` lines that mean pass, the uncertainty it resolves, and the spec path it decides:
+  - **Probe 1, shared state:** after a server start, pass = `base loaded … registry=visible games=2`, `onInit inits=1`, and `shared require agame ok=true` and `zgame ok=true`. Fallback decided by `loose ok=<bool>`: shared state works → main path; shared fails and loose works → spec fallback 1; both fail → spec fallback 2 (separate plugins).
+  - **Probe 2, reload:** `/probe start`, then `/probe rule` (expect `<id> v1`). Then, one at a time, each followed by `/probe state` and `/probe rule`: (a) touch `ArcadeProbeBase/main.lua`; (b) touch the round's game `entry.lua`; (c) change that game's `rules.lua` to return `"<id> v2"`, then also run `/probe rule fresh`. Record for each: whether the round survived, `inits`/`loads`, and which version `rule` and `rule fresh` return. Pass for the main path = the round survives (a) and (b); the spec says reloads end the round (fallback) if it doesn't.
+  - **Probe 3, extension load and unload:** with the game mod installed, place the probe app, then in the console `arcadeProbeBase.loadGame()`, `arcadeProbeBase.ping()` (expect one `game ping`), `arcadeProbeBase.unloadGame()` (expect `game unloaded`, and `game onUpdate` lines stop), `arcadeProbeBase.ping()` (expect no `game ping`), `arcadeProbeBase.unloadGame()` again (no error), `arcadeProbeBase.loadGame()`, `arcadeProbeBase.ping()` (expect exactly one `game ping`). Pass = main path; any answer after unload, or two per ping after reload → fallback (dormant extensions).
+  - **Probe 4, app content:** confirm `app mounted`; `arcadeProbeBase.show({game="A", extra="only in A"})`, then `arcadeProbeBase.show({game="B"})`: the app keeps `extra` (merging updates); then `arcadeProbeBase.snapshot({game="B"})`: `extra` disappears. Pass = the app switches content without a client restart, and the snapshot clears what the merge kept; the manager then sends a full snapshot on every game switch (the spec's fallback is the normal path). Ask for a screenshot after each step.
+  - **Probe 5, versions:** after joining with both mods, the server log shows `versions from <name>` with base `0.0.1` and game `0.0.2`, and `beamng.log` shows which API supplied them. Then reinstall with `--no-game`, rejoin, and expect game `missing` with base still `0.0.1`. Pass = main path; `source = none` → fallback (the outdated-mod check as Cops and Robbers does it today).
+  - **Removal:** `install.sh --remove <test-server-dir>`, then restart the test server and reconnect or quit the client: BeamMP stops watching deleted files but keeps their plugin state loaded until restart.
+- [ ] **Step 5: Run** `make probes-check` — expect every part to pass; run `make test` — expect it unchanged.
+- [ ] **Step 6: Commit** `probes: install script, check target and run sheet`.
 
 ### Task 4: Run the probes and record the results (maintainer)
 
-- [ ] **Step 1:** The maintainer runs `probes/engine/install.sh "<repo>/.testserver"` from a trusted checkout, restarts the local BeamMP server, joins, and follows `probes/engine/README.md`.
-- [ ] **Step 2:** The maintainer shares the `[arcade-probe]` lines from the server log and `beamng.log`.
-- [ ] **Step 3:** Record the results on arcade-base#1: each probe pass or fail, and for each failure the spec fallback that now applies.
-- [ ] **Step 4:** Remove the probes from the test server with `install.sh --remove`, and delete `probes/engine/` and the `probes-check` target in the next plan's first task.
+- [ ] **Step 1:** From a trusted arcade-base checkout, the maintainer runs `probes/engine/install.sh <cops-and-robbers checkout>/.testserver` (the local test server lives in the Cops and Robbers checkout), restarts the local BeamMP server, joins, and follows `probes/engine/README.md`.
+- [ ] **Step 2:** The maintainer shares the `[arcade-probe]` lines from the server log and `beamng.log`, and the probe 4 screenshots.
+- [ ] **Step 3:** Record the results on arcade-base#1: each probe's outcome and, for each, the spec path it decides (main path or which fallback).
+- [ ] **Step 4:** Remove the probes as the run sheet says (remove, restart the server, reconnect). `probes/engine/` and the `probes-check` target are deleted in the next plan's first task.
