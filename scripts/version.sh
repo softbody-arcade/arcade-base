@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+new="${1:-}"
+part="(0|[1-9][0-9]*)"
+pattern="^$part[.]$part[.]$part$"
+if [[ ! "$new" =~ $pattern ]]; then
+  echo "usage: make version V=x.y.z" >&2
+  exit 1
+fi
+
+refuse() {
+  echo "$*" >&2
+  exit 1
+}
+
+from="${RELEASE_FROM:-develop}"
+[[ "$from" == develop || "$from" == main ]] || refuse "FROM must be develop or main"
+release="release/$new"
+title="Release $new"
+body="Merging this PR publishes the release."
+
+command -v gh >/dev/null || refuse "gh is required to open the release PR"
+github_repo() {
+  local url="$1" host path
+  if [[ "$url" =~ ^(https|ssh)://([^/@]*@)?([^/@:]+)(:[0-9]+)?/(.*)$ ]]; then
+    host="${BASH_REMATCH[3]}"
+    path="${BASH_REMATCH[5]}"
+  elif [[ "$url" =~ ^([^/@:]+@)?([^/@:]+):([^/].*)$ ]]; then
+    host="${BASH_REMATCH[2]}"
+    path="${BASH_REMATCH[3]}"
+  else
+    return 1
+  fi
+  [[ "$host" == github.com || "$host" == ssh.github.com ]] || return 1
+  path="${path%/}"
+  path="${path%.git}"
+  [[ "$path" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+  echo "$path"
+}
+
+repo=""
+fetch_urls="$(git remote get-url --all origin 2>/dev/null || true)"
+push_urls="$(git remote get-url --push --all origin 2>/dev/null || true)"
+while IFS= read -r url; do
+  [[ -n "$url" ]] || continue
+  found="$(github_repo "$url")" || refuse "origin must fetch from and push to a GitHub repository"
+  [[ -z "$repo" || "${found,,}" == "${repo,,}" ]] || refuse "origin fetches from or pushes to more than one repository ($repo and $found)"
+  repo="$found"
+done <<<"$fetch_urls"$'\n'"$push_urls"
+[[ -n "$repo" ]] || refuse "origin must fetch from and push to a GitHub repository"
+gh auth status >/dev/null 2>&1 || refuse "authenticate gh before starting a release"
+git fetch origin "+refs/heads/$from:refs/remotes/origin/$from" "+refs/heads/main:refs/remotes/origin/main"
+base="$(git rev-parse --verify --end-of-options "refs/remotes/origin/$from^{commit}")"
+set +e
+git ls-remote --exit-code --heads origin "refs/heads/$release" >/dev/null
+lookup=$?
+set -e
+((lookup != 0)) || refuse "$release already exists on origin"
+((lookup == 2)) || refuse "could not check whether $release exists on origin"
+old="$(git show "$base:VERSION" 2>/dev/null || true)"
+[[ "$old" =~ $pattern ]] || refuse "invalid current version: $old"
+printf '%s\n' "$old" "$new" | sort -VCu || refuse "version must be greater than $old"
+if git cat-file -e "refs/remotes/origin/main:VERSION" 2>/dev/null; then
+  released="$(git show "refs/remotes/origin/main:VERSION")"
+else
+  released=0.0.0
+fi
+[[ "$released" =~ $pattern ]] || refuse "invalid released version on main: $released"
+printf '%s\n' "$released" "$new" | sort -VCu || refuse "version must be greater than $released (the latest release on main)"
+set +e
+git ls-remote --exit-code --tags origin "refs/tags/v$new" >/dev/null
+tag_lookup=$?
+set -e
+((tag_lookup != 0)) || refuse "tag v$new already exists on origin"
+((tag_lookup == 2)) || refuse "could not check whether tag v$new exists on origin"
+
+echo "$old -> $new"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+export GIT_INDEX_FILE="$tmp/index"
+git read-tree "$base"
+mode="$(git ls-tree "$base" -- VERSION | cut -d' ' -f1)"
+blob="$(printf '%s\n' "$new" | git hash-object -w --stdin)"
+git update-index --cacheinfo "${mode:-100644},$blob,VERSION"
+sign=()
+[[ "$(git config --type=bool commit.gpgsign || true)" != true ]] || sign=(-S)
+commit="$(git commit-tree "${sign[@]}" "$(git write-tree)" -p "$base" -m "chore: version $new")"
+unset GIT_INDEX_FILE
+
+git push --force-with-lease="refs/heads/$release:" origin "$commit:refs/heads/$release"
+if ! gh pr create --repo "$repo" --base main --head "$release" --title "$title" --body "$body"; then
+  echo "$release is pushed but its PR was not opened; run: gh pr create --repo $repo --base main --head $release --title \"$title\" --body \"$body\"" >&2
+  exit 1
+fi
