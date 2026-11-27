@@ -21,7 +21,7 @@ Needed once game code moves here from Cops and Robbers (not used by any check ye
 
 ## Checks
 
-- `make test` runs the tests of the privacy check, the board script and the doctor, and checks that relative links (and their heading anchors) in the docs and `AGENTS.md` resolve.
+- `make test` runs the tests of the privacy check, the board script and the doctor.
 - `make privacy` scans the tree for personal data and private server details.
 - `make hooks` turns on the pre-push privacy check (once per clone, from a checkout of `develop` you trust).
 
