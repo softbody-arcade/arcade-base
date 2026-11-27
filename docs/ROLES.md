@@ -81,7 +81,7 @@ The `maintainers` team has Admin on the repo and on the board. Org-wide settings
 
 Only maintainers:
 - triage new issues, order the Next lane, and make every card move other than the playtester and contributor drags above
-- merge PRs into `develop`, and release PRs into `main`, after the merge gate in [AGENTS.md](../AGENTS.md): the maintainer's go, a final review of the head being merged, and a playtest result where needed. GitHub itself requires a PR with the CI checks green: `test` and `privacy`. Nobody can push to `develop` or `main` directly, maintainers included.
+- merge PRs into `develop`, and release PRs into `main`, after the merge gate in [AGENTS.md](../AGENTS.md): the maintainer's go, a final review of the head being merged, and a playtest result where needed. GitHub itself requires a PR with the CI checks green: `test`, `privacy` and `links`. Nobody can push to `develop` or `main` directly, maintainers included.
 - start a release with `make version V=x.y.z` and merge the `Release x.y.z` PR, which tags and publishes it
 - stage builds on the local test server and deploy to the live server
 - change repo settings, rulesets, and the board's fields, views and workflows
@@ -99,7 +99,7 @@ An agent (Claude, Codex or any other) acts with the GitHub login of the person r
 | Automation | What it does | Rights |
 |---|---|---|
 | Board workflows | Put issues added to the board in Inbox (the board's one auto-add workflow covers Cops and Robbers, so the maintainer adds arcade-base issues with `gh project item-add` or on the board until the board bot adds them), move closed issues to Accepted and reopened ones back to Inbox, add sub-issues. `scripts/board release` (run by the maintainer) moves released and finished work to Done and archives closed Done cards after 14 days without updates | Board only |
-| CI (`ci.yml`) | Runs the `test` and `privacy` checks on every PR and on pushes to `develop` and `main` | Read-only token |
+| CI (`ci.yml`) | Runs the `test`, `privacy` and `links` checks on every PR and on pushes to `develop` and `main` | Read-only token |
 | Release (`release.yml`) | When a PR from this repo's `release/x.y.z` branch merges into `main` (or on a manual run for an already merged one): runs `make test` on the merge commit without write access, then tags `vx.y.z`, publishes the GitHub Release with generated notes and closes milestone `x.y.z`, then opens **Sync main into develop** | Writes in the publish job (tag, release, milestone) and the sync job (opens a PR) |
 | Dependabot | Opens a PR each week when a GitHub Action has a new version, and raises security alerts | Opens PRs; a maintainer merges them |
 | Secret scanning | Blocks a push that contains a supported secret pattern, unless push protection is bypassed | Push protection on |
@@ -108,7 +108,7 @@ An agent (Claude, Codex or any other) acts with the GitHub login of the person r
 
 | Ruleset | Applies to | Effect |
 |---|---|---|
-| `develop-checks`, `main-checks` | `develop`, `main` | PR required, the `test` and `privacy` checks must pass, merge commits only, no force-push or deletion. Nobody bypasses them. |
+| `develop-checks`, `main-checks` | `develop`, `main` | PR required, the `test`, `privacy` and `links` checks must pass, merge commits only, no force-push or deletion. Nobody bypasses them. |
 | `develop-merge`, `main-merge` | `develop`, `main` | Only maintainers can update them, and only by merging a PR. That merge counts as a bypass of this ruleset: `gh pr merge --admin`, or the "bypass rules" tick in the merge box. |
 | `release-branches` | `release/*` | Only maintainers can create, update or delete them. |
 | `release-tags` | `v*` tags | Only maintainers can move or delete them. |

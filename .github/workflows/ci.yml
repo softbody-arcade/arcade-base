@@ -38,3 +38,24 @@ jobs:
         run: scripts/privacy-check tree HEAD
       - if: github.event_name == 'push'
         run: scripts/privacy-check history -- HEAD
+
+  links:
+    runs-on: ubuntu-latest
+    env:
+      LYCHEE_URL: https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz
+      LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install lychee 0.24.2 (checksum verified)
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/lychee.tar.gz" "$LYCHEE_URL"
+          echo "$LYCHEE_SHA256  $RUNNER_TEMP/lychee.tar.gz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/lychee"
+          tar -xzf "$RUNNER_TEMP/lychee.tar.gz" -C "$RUNNER_TEMP/lychee"
+          lychee=$(find "$RUNNER_TEMP/lychee" -type f -name lychee -perm -u+x | head -n 1)
+          [[ -n "$lychee" ]]
+          echo "LYCHEE=$lychee" >> "$GITHUB_ENV"
+      - name: Check relative links and anchors
+        run: '"$LYCHEE" --offline --include-fragments --no-progress AGENTS.md CONTRIBUTING.md README.md SECURITY.md docs'
