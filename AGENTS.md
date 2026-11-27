@@ -125,7 +125,7 @@ Add source comments or emojis only when the maintainer asks for them.
   - the final review done on that same head SHA, with its blocking findings resolved
   - for `needs-playtest` PRs, a `board result` of pass or defer for exactly that head SHA. A later push voids the result, the review and the go.
 - **Merging.** From the maintainer's main checkout (on `develop`):
-  1. Remove the worktree.
+  1. Remove the worktree. Check first that it holds no uncommitted work: `git -C <worktree> status --short` prints nothing, and in a game repo `git -C <worktree>/base status --short` prints nothing too. Then `git worktree remove <worktree>`; in a game repo, where Git refuses to remove a worktree that contains the `base/` submodule, use `git worktree remove --force <worktree>` after that check, then `git worktree prune`.
   2. `gh pr merge <pr> --admin --merge --delete-branch --match-head-commit <sha>`. The **Sync main into develop** PR is the exception: its head is `main`, so merge it without `--delete-branch`.
   3. Pull `develop`.
 
