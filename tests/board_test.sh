@@ -568,3 +568,39 @@ grep -qx 'Board writes require base/ at its pinned commit' "$tmp/out" || { cat "
 git -C "$game/base" checkout -q scripts/board.conf
 : > "$LOG"
 (cd "$game" && base/scripts/board list) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+grep -q 'softbody-arcade/arcade-base#' "$tmp/out" && { cat "$tmp/out" >&2; exit 1; }
+(cd "$tmp/repo" && scripts/board list) >"$tmp/out" 2>&1
+grep -q 'softbody-arcade/arcade-base#' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+game_writes_to() {
+  : > "$LOG"
+  (cd "$1" && "$2" labels) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; return 1; }
+  grep -q -- "label create .* --repo $3 " "$LOG" || { cat "$tmp/out" >&2; return 1; }
+  ! grep -q -- "--repo softbody-arcade/arcade-base" "$LOG"
+}
+game_writes_to "$game/scripts" ../base/scripts/board softbody-arcade/test-game
+game_writes_to "$game/base" scripts/board softbody-arcade/test-game
+ln -s ../base/scripts/board "$game/scripts/board"
+git -C "$game" add scripts/board
+git -C "$game" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -qm link
+game_writes_to "$game" scripts/board softbody-arcade/test-game
+git -C "$game/base" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -q --allow-empty -m moved
+if (cd "$game" && scripts/board labels) >"$tmp/out" 2>&1; then exit 1; fi
+grep -qx 'Board writes require base/ at its pinned commit' "$tmp/out" || grep -qx 'Board writes require a clean checkout' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+git -C "$game/base" reset -q --hard HEAD^
+printf 'repo=softbody-arcade/elsewhere\nowner=softbody-arcade\ntitle=Softbody Arcade\n' > "$game/scripts/board.conf"
+git -C "$game" update-index --assume-unchanged scripts/board.conf
+game_writes_to "$game" base/scripts/board softbody-arcade/test-game
+git -C "$game" update-index --no-assume-unchanged scripts/board.conf
+git -C "$game" checkout -q scripts/board.conf
+loose="$tmp/loose"
+git init -qb develop "$loose"
+mkdir -p "$loose/scripts"
+cp "$game/scripts/board.conf" "$loose/scripts/board.conf"
+git -C "$loose" -c protocol.file.allow=always submodule add -q "$tmp/repo" base
+git -C "$loose" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -qm loose
+if (cd "$loose" && base/scripts/board list) >"$tmp/out" 2>&1; then exit 1; fi
+grep -qx 'The game has no committed scripts/board.conf' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+unrelated="$tmp/unrelated"
+git init -qb develop "$unrelated"
+if (cd "$unrelated" && "$game/base/scripts/board" list) >"$tmp/out" 2>&1; then exit 1; fi
+grep -qx "Run the board script from inside the game's checkout" "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
