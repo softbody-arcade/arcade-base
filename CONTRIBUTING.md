@@ -9,7 +9,7 @@ The full rules, for people and for coding agents alike, are in [AGENTS.md](AGENT
 1. Install the prerequisites listed in [Development](docs/DEVELOPMENT.md#prerequisites).
 2. Clone the repo and run `make hooks` once. This turns on the privacy check that runs before every push.
 3. Commit with your GitHub noreply address (`git config user.email ID+login@users.noreply.github.com`), never a personal or work email.
-4. Run `make doctor` to check your tools, hooks and email, then check everything works: `make test`.
+4. Run `make doctor` to check your tools, hooks and email (tools needed only for future game code may show as missing; see [Development](docs/DEVELOPMENT.md#prerequisites)), then check everything works: `make test`.
 
 ## Pick something to work on
 

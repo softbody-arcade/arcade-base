@@ -11,7 +11,7 @@ GitHub Issues and the organization board **Softbody Arcade** (project 1) record 
 - **Type** (the org's issue types): `Feature` for ideas and new functionality, `Bug`, `Task` for maintenance and tooling, `In-game check` for something to verify in game. Every issue outside Inbox has a type, a priority and an effort.
 - **Priority** (the org's issue field): `Urgent`, `High`, `Medium` or `Low`. Rank by player impact, then host or panel problems, then cosmetics, then maintainer-only work. Every issue outside Inbox has one.
 - **Effort** (the org's issue field): `High`, `Medium` or `Low`, a rough size set at triage and refined in Design. Together with Priority it ranks the work: the board's **Quick wins** view lists open Urgent or High issues with Low effort, which are good picks for Next and for contributors.
-- **Milestone**: the release version an issue is targeted at, named `x.y.z`. The maintainer assigns it when committing to a release. A release ships when its milestone's issues are closed or moved on, and `release.yml` closes the milestone.
+- **Milestone**: the release version an issue is targeted at, named `x.y.z`. The maintainer assigns it when committing to a release. A release ships when its milestone's issues are closed or moved on. Once this repo has a release workflow, `release.yml` closes the milestone; until then the maintainer closes it.
 - **Parent and sub-issues** give the structure: a large feature is a parent with its parts as sub-issues, and the issues folded into a fix batch become sub-issues of the batch's ticket. Progress rolls up on the parent.
 - **Blocked by / blocking** (issue dependencies) records order: `scripts/board block <n> --by <m>`. Never use a label or prose for it.
 - **Labels** (the workflow labels; Dependabot adds its own) remain only where nothing native exists: `needs-decision` while an issue waits on the maintainer, `needs-playtest` on a PR whose change a player would see, hear or feel, and `good first issue` / `help wanted` for contributors, and `accessibility` for barriers affecting players with disabilities. Close duplicates and dropped work with GitHub's "duplicate" and "not planned" close reasons.
@@ -48,7 +48,7 @@ GitHub Issues and the organization board **Softbody Arcade** (project 1) record 
 - **Maintainers:** anything.
 - **Playtesters:** on a work card whose PR is already merged and was tested on `develop`: Playtest → Accepted when it passed, Playtest → Build when it didn't, with a comment saying what they saw. On an `In-game check` issue, or a staged PR that isn't merged, they only comment their result; the maintainer records it with `board result`, which needs the card in Playtest.
 - **Contributors:** their own assigned cards between Build and Review. Leaving Design stays the maintainer's call (plan approval).
-- **Everyone with board Write:** new minigame ideas go on the board as **draft items** (the **Game ideas** view). A draft becomes an issue in a game's repo once that game has one. Work on an existing game starts as an issue in its repo, which lands in Inbox by itself.
+- **Everyone with board Write:** new minigame ideas go on the board as **draft items** (the **Game ideas** view). A draft becomes an issue in a game's repo once that game has one. Work on an existing game or the base starts as an issue in its repo. Issues filed in `cops-and-robbers` land in Inbox by themselves; the board's one auto-add workflow covers only that repo, so issues filed in `arcade-base` are put on the board by the maintainer (`scripts/board new`, or by hand) until the board bot adds them.
 - The green status badge on an issue page is GitHub's own issue status (Backlog, Done, …), not the board lane. Ignore it; the board lane is what counts.
 
 **Agent rules the script cannot check:**
@@ -68,7 +68,7 @@ GitHub Issues and the organization board **Softbody Arcade** (project 1) record 
 | `playtesters` | Triage: comment and file issues | Write: their own moves above, and game idea drafts |
 
 - **Playtesters** take `In-game check` issues and post what they saw as a comment; the maintainer records the result. They may drag merged work they tested, as above.
-- **Maintainer-only:** `scripts/board` writes, triage, ordering Next, every card move other than the playtester and contributor drags above, milestones, merging, releases, staging on `.testserver`, the in-game probe extensions and deploys. A contributor's agent skips these and says in its PR what still needs doing.
+- **Maintainer-only:** `scripts/board` writes, triage, ordering Next, every card move other than the playtester and contributor drags above, milestones, merging, releases, staging on the local test server, the in-game probe extensions and deploys. A contributor's agent skips these and says in its PR what still needs doing.
 
 ## Design and implementation
 
@@ -104,7 +104,7 @@ Add source comments or emojis only when the maintainer asks for them.
 - **Branch model.**
   - `develop` is the default branch. Every ticket's PR targets it, and merged tickets wait there, so several can be staged and playtested together.
   - `main` only changes through releases and always matches the latest release.
-  - `release/x.y.z` carries a release from `develop` (or, for a hotfix, from `main`) into `main`. After it merges, `release.yml` opens a PR that merges `main` back into `develop`.
+  - `release/x.y.z` carries a release from `develop` (or, for a hotfix, from `main`) into `main`. Once this repo has a release workflow, `release.yml` opens a PR after that merge that brings `main` back into `develop`; until then there are no releases here.
 - **One branch per piece of work.**
   - Each feature or fix batch gets its own branch and worktree, named `feature/<topic>` or `fixes/<topic>`, created with `gh issue develop <n>` so the issue's Development section shows it.
   - Push at the first commit and open a draft PR with `Fixes #n`.
@@ -157,7 +157,7 @@ Hooks, Make targets and scripts run with the credentials of whoever runs them, a
   - For each manual check, give the shortest setup and action, the observable pass condition, and the uncertainty it resolves.
   - Ask for a second player only when observing a second client is essential.
   - A deferred check becomes an `In-game check` issue in Playtest, filed by `board result <n> defer --checks-file F`.
-- **Staging, engine probes and deploys** follow the [Cops and Robbers rules](https://github.com/softbody-arcade/cops-and-robbers/blob/develop/AGENTS.md#verification-and-release) until the base has its own install targets. Agents never stage a contributor's PR.
+- **Staging, engine probes and deploys.** This repo has no install targets yet, so a base change can't be staged from here. A base change is playtested through a game that uses it: from that game's trusted checkout, following that game's AGENTS.md, with the base change included in what is staged. Until Cops and Robbers runs on the base ([cops-and-robbers#56](https://github.com/softbody-arcade/cops-and-robbers/issues/56)), no game uses it, so base changes rely on automated tests. Agents never stage a contributor's PR.
 - **Releases.**
   - The base has no release workflow yet. It gets one, copied from Cops and Robbers, once it has something to ship; game repos then pin the base's shared Actions to the commit of a release.
   - The base uses x.y.z versions. A minor release adds things but never breaks a game; anything that would break one waits for the next major version.

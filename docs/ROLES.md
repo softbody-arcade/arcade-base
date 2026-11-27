@@ -50,7 +50,7 @@ What they normally do:
 3. For merged work they tested on `develop`, move the card: **Playtest → Accepted** when it passed, **Playtest → Build** when it didn't. For `In-game check` issues and unmerged changes, the comment is enough; the maintainer records the result.
 4. File a **Bug** for anything else they notice.
 
-They can also add new minigame ideas to the board as draft items (the **Game ideas** view). Bugs and ideas for an existing game start as an issue in its repo, which lands in Inbox by itself. The green status badge on an issue page is GitHub's own issue status, not the board lane; the board lane is what counts.
+They can also add new minigame ideas to the board as draft items (the **Game ideas** view). Bugs and ideas for an existing game, or for the base, start as an issue in its repo. Issues filed in `cops-and-robbers` land in Inbox by themselves; the board's one auto-add workflow covers only that repo, so issues filed in `arcade-base` are put on the board by the maintainer (`scripts/board new`, or by hand) until the board bot adds them. The green status badge on an issue page is GitHub's own issue status, not the board lane; the board lane is what counts.
 
 ## Contributors
 

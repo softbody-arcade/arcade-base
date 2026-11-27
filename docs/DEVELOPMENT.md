@@ -4,16 +4,20 @@ Setting up a machine and running the checks. How to contribute is in [CONTRIBUTI
 
 ## Prerequisites
 
-The same as for Cops and Robbers, since the game code moving here needs them:
+Needed to contribute today (`make test`, the hooks and the board script):
 
-- `lua5.3`, `luajit` and `python3` for tests and Lua checks
-- Node 22 with npm for UI checks
-- `zip`, `unzip`, `rsync`, `gzip`, `sha256sum` (GNU coreutils) and GNU tar for packaging
+- `python3` for the privacy check and its tests
 - `git` 2.41 or newer (the privacy check uses `--attr-source`)
 - `ssh-keygen` for SSH commit signing
 - Bash 4.4+, `jq` and `gh` 2.106+ for `scripts/board` and its tests
 
-Run `make doctor` to check these prerequisites and your contributor setup.
+Needed once game code moves here from Cops and Robbers (not used by any check yet):
+
+- `lua5.3` and `luajit` for tests and Lua checks
+- Node 22 with npm for UI checks
+- `zip`, `unzip`, `rsync`, `gzip`, `sha256sum` (GNU coreutils) and GNU tar for packaging
+
+`make doctor` checks both groups and your contributor setup, so until you install the second group it reports those tools as missing. Everything in the first group must pass.
 
 ## Checks
 
