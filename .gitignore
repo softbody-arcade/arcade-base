@@ -1,0 +1,6 @@
+.superpowers/
+.claude/worktrees/
+.claude/settings.local.json
+.worktrees/
+docs/.obsidian/*
+!docs/.obsidian/app.json
