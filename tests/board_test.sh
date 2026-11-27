@@ -77,13 +77,13 @@ case "$*" in
     jq -n --arg lane "$status" --arg priority "${FIELD-High}" --arg effort "${SIZE-Low}" \
       --arg type "${TYPE-Feature}" --arg state "${STATE:-OPEN}" --arg label "${TAGS:-}" \
       --arg assigned "$ASSIGNED" --arg prs "${PRS:-}" --arg merged "${MERGED_PRS:-}" --argjson blockers "$BLOCKERS" \
-      --argjson count "${CARD_COUNT:-1}" --argjson others "${OTHER_COUNT:-0}" --arg owner "${OWNER_TYPE:-Organization}" '
+      --argjson count "${CARD_COUNT:-1}" --argjson others "${OTHER_COUNT:-0}" --arg otherrepo "${OTHER_REPO:-softbody-arcade/other}" --arg owner "${OWNER_TYPE:-Organization}" '
       def nodes($values; key): {nodes: [$values | split(",")[] | select(. != "" and . != "-") | key]};
       {data: {($owner|ascii_downcase): {projectV2: {items: {nodes: [
         {content: null}, {content: {}},
         (range(1; $count+$others+1) as $n | {
           status: (if $lane == "-" then null else {name: $lane} end),
-          content: {repository: {nameWithOwner: (if $n > $count then "softbody-arcade/other" else "softbody-arcade/arcade-base" end)},
+          content: {repository: {nameWithOwner: (if $n > $count then $otherrepo else "softbody-arcade/arcade-base" end)},
             number: $n, title: "Card", state: $state, milestone: {title: "v1"},
             issueType: (if $type == "-" then null else {name: $type} end),
             issueFieldValues: {nodes: [
@@ -567,8 +567,9 @@ if (cd "$game" && base/scripts/board labels) >"$tmp/out" 2>&1; then exit 1; fi
 grep -qx 'Board writes require base/ at its pinned commit' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 git -C "$game/base" checkout -q scripts/board.conf
 : > "$LOG"
-(cd "$game" && base/scripts/board list) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+(cd "$game" && OTHER_COUNT=1 OTHER_REPO=softbody-arcade/test-game base/scripts/board list) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
 grep -q 'softbody-arcade/arcade-base#' "$tmp/out" && { cat "$tmp/out" >&2; exit 1; }
+grep -q 'softbody-arcade/test-game#2' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 (cd "$tmp/repo" && scripts/board list) >"$tmp/out" 2>&1
 grep -q 'softbody-arcade/arcade-base#' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 game_writes_to() {
@@ -604,3 +605,14 @@ unrelated="$tmp/unrelated"
 git init -qb develop "$unrelated"
 if (cd "$unrelated" && "$game/base/scripts/board" list) >"$tmp/out" 2>&1; then exit 1; fi
 grep -qx "Run the board script from inside the game's checkout" "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+(cd "$game" && CDPATH=. base/scripts/board list) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+(cd "$tmp/repo" && CDPATH=. scripts/board list) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+chmod +x "$game/scripts/board.conf"
+git -C "$game" add scripts/board.conf
+git -C "$game" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -qm exec
+(cd "$game" && base/scripts/board list) >"$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+git -C "$game" switch -qc no-base
+git -C "$game" rm -q --cached base
+git -C "$game" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -qm "no base"
+if (cd "$game/base" && scripts/board show 1) >"$tmp/out" 2>&1; then exit 1; fi
+grep -qx "This base/ isn't part of a game checkout any more; run the board script from arcade-base or from a game whose branch pins base/" "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }

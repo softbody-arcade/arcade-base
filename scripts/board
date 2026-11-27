@@ -19,6 +19,7 @@ refuse() { echo "$*" >&2; exit 1; }
 gh() { command gh "$@" || exit 2; }
 error() { echo "$*" >&2; exit 2; }
 if [[ $# == 1 && ( $1 == --help || $1 == -h ) ]]; then usage; exit 0; fi
+unset CDPATH
 script_path=$0
 while [[ -L $script_path ]]; do
   link_dir=$(cd -P "$(dirname "$script_path")" && pwd)
@@ -34,9 +35,11 @@ if [[ -n $super ]]; then
   [[ $script_root == "$super/base" ]] || refuse "The board script runs from arcade-base or from a game's base/"
   [[ $caller_root == "$super" || $caller_root == "$script_root" ]] || refuse "Run the board script from inside the game's checkout"
   root=$super as_base=true
-  [[ $(git -C "$root" ls-tree HEAD -- scripts/board.conf | cut -d' ' -f1) =~ ^1006[0-9]{2}$ ]] || refuse 'The game has no committed scripts/board.conf'
+  [[ $(git -C "$root" ls-tree HEAD -- scripts/board.conf | cut -d' ' -f1) =~ ^100(644|755)$ ]] || refuse 'The game has no committed scripts/board.conf'
   conf_text=$(git -C "$root" show HEAD:scripts/board.conf)
 else
+  script_git_dir=$(git -C "$script_root" rev-parse --absolute-git-dir 2>/dev/null || true)
+  [[ $script_git_dir != */.git/modules/* && $script_git_dir != */.git/worktrees/*/modules/* ]] || refuse "This base/ isn't part of a game checkout any more; run the board script from arcade-base or from a game whose branch pins base/"
   [[ $caller_root == "$script_root" ]] || refuse 'Run the board script from its own checkout'
   root=$script_root as_base=false
   conf_text=$(<"$script_root/scripts/board.conf")
