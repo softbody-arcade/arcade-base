@@ -74,10 +74,10 @@ arcade-base's [docs/ROLES.md](docs/ROLES.md) explains for people what each role 
 
 ## Game repos
 
-- **The base as a submodule.** A game repo includes arcade-base as a Git submodule at `base/`, pinned to a base release (to a commit on arcade-base's `develop` until the base has releases). Clone with `git clone --recurse-submodules`, or run `git submodule update --init` in an existing clone. Dependabot proposes moving the pin, and a pin moves only through a reviewed PR.
+- **The base as a submodule.** A game repo includes arcade-base as a Git submodule at `base/`, pinned to the commit of a base release. Clone with `git clone --recurse-submodules`, or run `git submodule update --init` in an existing clone. Dependabot proposes moving the pin, and a pin moves only through a reviewed PR. A game moves its submodule and its pinned shared Actions to a new base release in the same PR, and its CI checks that both reference the same base version. How a game pins before the base has its first release is still open (arcade-base#6).
 - **Loading these rules.** The game's `CLAUDE.md` is `@base/AGENTS.md` followed by `@AGENTS.md`. The game's own `AGENTS.md` starts by telling every agent to read `base/AGENTS.md` first, then holds only what is specific to that game.
 - **What a game's own rules list:** its repo name and what it is, which repo the board's auto-add covers, its local checks and CI jobs, staging on the local test server, engine probes, packaging, releases and deploys, and anything that narrows these shared rules.
-- **Shared tooling.** The base's scripts and GitHub Actions are meant to be used from the base: scripts from `base/scripts/`, Actions pinned to the commit of a base release with the version in a comment. Until a game has moved onto them, it keeps its own copies and its rules say so.
+- **Shared tooling.** The base's scripts and GitHub Actions are meant to be used from the base: scripts from `base/scripts/`, Actions pinned to the commit of a base release with the version in a comment. A script moves to that use only once it supports being called from a game: today `base/scripts/board` reads arcade-base's own `board.conf` and would act on arcade-base, so a game runs its own `scripts/board` (its `board.conf` names the game repo). Until a game has moved onto a shared script or Action, it keeps its own copy and its rules say so.
 - **Docs.** A game keeps its own specs, plans and gameplay docs in its `docs/`, next to its code. What spans games lives in arcade-base.
 
 ## Design and implementation
@@ -112,7 +112,7 @@ Add source comments or emojis only when the maintainer asks for them.
 ## Branches, pull requests and merging
 
 - **Branch model.**
-  - `develop` is the default branch. Every ticket's PR targets it, and merged tickets wait there, so several can be staged and playtested together.
+  - `develop` is the default branch. Every ticket's PR targets it, and merged tickets wait there, so several can be staged and playtested together. The one exception is a hotfix: its fix goes through a PR into that release's `release/x.y.z` branch, so unreleased work on `develop` stays out.
   - `main` only changes through releases and always matches the latest release.
   - `release/x.y.z` carries a release from `develop` (or, for a hotfix, from `main`) into `main`. In a repo with a release workflow, `release.yml` opens a PR after that merge that brings `main` back into `develop`.
 - **One branch per piece of work.**
@@ -125,7 +125,7 @@ Add source comments or emojis only when the maintainer asks for them.
   - for `needs-playtest` PRs, a `board result` of pass or defer for exactly that head SHA. A later push voids the result, the review and the go.
 - **Merging.** From the maintainer's main checkout (on `develop`):
   1. Remove the worktree.
-  2. `gh pr merge <pr> --admin --merge --delete-branch --match-head-commit <sha>`.
+  2. `gh pr merge <pr> --admin --merge --delete-branch --match-head-commit <sha>`. The **Sync main into develop** PR is the exception: its head is `main`, so merge it without `--delete-branch`.
   3. Pull `develop`.
 
   `develop-merge` and `main-merge` let only maintainers update those branches, so every merge into them is a maintainer bypass:
@@ -141,7 +141,7 @@ Hooks, Make targets and scripts run with the credentials of whoever runs them, a
 - Push only from that checkout or from a worktree of a branch the maintainer or their agent wrote.
 - Never check out, build, test, run or push a contributor's branch. Agents review contributor PRs by diff only, on GitHub or with `git diff`; CI runs their code.
 - Agents never stage a contributor's PR on the test server.
-- **The `base/` submodule is code.** A PR that changes `.gitmodules` or moves the `base` pin is reviewed like any other code change: check that the URL is `https://github.com/softbody-arcade/arcade-base` (or its SSH form) and that the new pin is a commit on arcade-base's `develop` or a release. Run `base/` scripts only from a trusted checkout of `develop` whose submodule is at the pinned commit (`git submodule status` shows no `+` or `-`), never from a branch under review.
+- **The `base/` submodule is code.** A PR that changes `.gitmodules` or any gitlink is reviewed like any other code change. Check every submodule entry together: the only one is `base`, its path is `base`, its URL is `https://github.com/softbody-arcade/arcade-base` (or its SSH form), and the gitlink points at the commit of a base release. Run `base/` scripts only from a trusted checkout of `develop` whose submodule is at the pinned commit and clean: `git submodule status` shows no `+`, `-` or `U`, and `git -C base status --porcelain` prints nothing. Never run them from a branch under review.
 
 ## Privacy
 
@@ -159,15 +159,15 @@ Hooks, Make targets and scripts run with the credentials of whoever runs them, a
 
 - **Automated tests first.** If known inputs determine the expected result, verify it with an automated test: for example recorded round data for leaderboard ranking, or sampled positions and speeds for catch timing. Add a missing regression test when needed. A passing test closes that part of the check.
 - **Local checks.** Each repo's own rules list its local checks (at least `make test`). Keep game-side Lua compatible with BeamNG's LuaJIT: check each changed game-side Lua file with `luajit -bl path/to/file.lua >/dev/null`.
-- **CI.** Every CI job a repo runs on pull requests is a required check in its `develop-checks` and `main-checks` rulesets, by its exact job name, and no required check names a job that doesn't run. Adding or renaming a job changes both rulesets in the same step.
+- **CI** runs on every PR and on every push to `develop` and `main`. Every CI job a repo runs on pull requests is a required check in its `develop-checks` and `main-checks` rulesets, by its exact job name, and no required check names a job that doesn't run. Adding or renaming a job changes both rulesets in the same step.
 - **Playtests.**
   - Ask the maintainer for a playtest (label the PR `needs-playtest`) only when an open question depends on what BeamNG or BeamMP actually does, or on what the player sees, hears or feels. Use an engine probe or logs first when they can answer it.
   - For each manual check, give the shortest setup and action, the observable pass condition, and the uncertainty it resolves.
   - Ask for a second player only when observing a second client is essential.
   - A deferred check becomes an `In-game check` issue in Playtest, filed by `board result <n> defer --checks-file F`.
-- **Staging, engine probes and deploys** are maintainer-only. Each game's own rules give the steps. Agents never stage a contributor's PR.
+- **Staging, engine probes and deploys** are maintainer-only. Each game's own rules give the steps. Agents never stage a contributor's PR. A base change is playtested through a game whose `base/` is at exactly the base commit under review; a playtest against the game's previous pin doesn't count for it.
 - **Releases.**
-  - Agents merge a release PR only after the maintainer said, in the current session, to release that version. A previous release's approval applies to that release alone.
+  - Agents release a version, by any route (merging a release PR, pushing a tag, publishing a GitHub Release), only after the maintainer said, in the current session, to release that version. A previous release's approval applies to that release alone.
   - Before merging a release PR, check that milestone `x.y.z` has no open issues (`gh issue list --milestone x.y.z --state open`); close them or move them to another milestone.
   - Version numbers stay out of feature plans and branches.
   - The base uses x.y.z versions. A minor release adds things but never breaks a game; anything that would break one waits for the next major version.
@@ -181,5 +181,6 @@ This section applies only when working in arcade-base itself. Game repos skip it
 - **Board.** The board's auto-add covers Cops and Robbers, not this repo: issues filed here are added by the maintainer (see **Getting issues on the board**).
 - **Local checks.** Run `make test` for every change, and `make privacy` before pushing a branch with new files. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) lists the prerequisites (`make doctor` checks them).
 - **CI** runs `test` and `privacy`, the two required checks.
-- **Staging.** This repo has no install targets yet, so a base change can't be staged from here. It is playtested through a game that uses it, from that game's trusted checkout and following that game's rules. Until a game runs on the base, base changes rely on automated tests.
+- **Staging.** This repo has no install targets yet, so a base change can't be staged from here. It is playtested through a game that uses it, with the game's `base/` at the commit under review, from that game's trusted checkout and following that game's rules. Until a game runs on the base, base changes rely on automated tests.
 - **Releases.** The base has no release workflow yet. It gets one, copied from Cops and Robbers, once it has something to ship; game repos then pin the base's shared Actions and submodule to the commit of a release.
+- **Board script.** `scripts/board` here reads this repo's `board.conf`, so it acts on arcade-base only; supporting calls from a game is softbody-arcade/arcade-base#8.
