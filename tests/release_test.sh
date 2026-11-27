@@ -342,11 +342,17 @@ set -e
 check "publish refuses a version with a leading zero" '[[ $(cat "$tmp/status") == 1 && ! -e $state/log ]]'
 
 select_script="$tmp/select.sh"
-awk '/^      - id: select$/ {found = 1} found && /^        run: \|$/ {inrun = 1; next} inrun && /^          / {print substr($0, 11); next} inrun {exit}' "$ROOT/.github/workflows/release.yml" > "$select_script"
+extract_select() {
+  awk '/^      - id: select$/ {found = 1} found && /^        run: \|$/ {inrun = 1; next} inrun && /^ *$/ {blank = blank substr($0, 11) "\n"; next} inrun && /^          / {printf "%s", blank; blank = ""; print substr($0, 11); next} inrun {exit}' "$1"
+}
+extract_select "$ROOT/.github/workflows/release.yml" > "$select_script"
+printf '%s\n' '      - id: select' '        run: |' '          echo one' '' '            ' '          echo two' '      - id: next' '        run: echo three' > "$tmp/select-fixture.yml"
+check "the select extraction keeps blank lines and their spaces" '[[ $(extract_select "$tmp/select-fixture.yml") == $'"'"'echo one\n\n  \necho two'"'"' ]]'
 select_run() {
   set +e
   : > "$tmp/output"
-  env "$@" GITHUB_OUTPUT="$tmp/output" GITHUB_REPOSITORY=test/repo PATH="$pub/bin:$PATH" bash -euo pipefail "$select_script" > "$tmp/out" 2>&1
+  rm -rf "$tmp/select-state" && mkdir -p "$tmp/select-state"
+  env "$@" PUB_STATE="$tmp/select-state" GITHUB_OUTPUT="$tmp/output" GITHUB_REPOSITORY=test/repo PATH="$pub/bin:$PATH" bash -euo pipefail "$select_script" > "$tmp/out" 2>&1
   echo $? > "$tmp/status"
   set -e
 }
@@ -358,7 +364,7 @@ check "select skips a branch that isn't a release" '[[ $(cat "$tmp/status") == 0
 select_run GITHUB_EVENT_NAME=pull_request HEAD_REF=release/01.2.3 MERGE_SHA="$sha"
 check "select refuses a release branch with a leading zero" '[[ $(cat "$tmp/status") != 0 && ! -s $tmp/output ]]'
 select_run GITHUB_EVENT_NAME=workflow_dispatch VERSION=01.2.3
-check "select refuses a manual version with a leading zero" '[[ $(cat "$tmp/status") != 0 && ! -s $tmp/output ]] && grep -q "Expected version x.y.z" "$tmp/out" && ! grep -q "^pr list" "$pub/new/log"'
+check "select refuses a manual version with a leading zero" '[[ $(cat "$tmp/status") != 0 && ! -s $tmp/output ]] && grep -q "Expected version x.y.z" "$tmp/out" && [[ ! -s $tmp/select-state/log ]]'
 
 if ((failures)); then
   echo "$failures release checks failed"
