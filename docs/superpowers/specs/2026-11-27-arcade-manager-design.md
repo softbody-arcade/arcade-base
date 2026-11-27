@@ -1,6 +1,6 @@
 # Arcade manager: how games run on the base
 
-Status: draft for the maintainer's review, 2026-11-27. Ticket: [arcade-base#1](https://github.com/softbody-arcade/arcade-base/issues/1); the decisions it rests on are comments there. Cops and Robbers' side of the move: [cops-and-robbers#56](https://github.com/softbody-arcade/cops-and-robbers/issues/56).
+Status: approved by the maintainer, 2026-11-27. Ticket: [arcade-base#1](https://github.com/softbody-arcade/arcade-base/issues/1); the decisions it rests on are comments there. Cops and Robbers' side of the move: [cops-and-robbers#56](https://github.com/softbody-arcade/cops-and-robbers/issues/56).
 
 This spec is for the person deciding how games use the base. It describes the manager, what a game provides, how the two are loaded and talk, and the order in which Cops and Robbers moves onto it. It is the base's first version; the plan that follows breaks it into tasks.
 
