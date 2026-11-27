@@ -19,11 +19,36 @@ refuse() { echo "$*" >&2; exit 1; }
 gh() { command gh "$@" || exit 2; }
 error() { echo "$*" >&2; exit 2; }
 if [[ $# == 1 && ( $1 == --help || $1 == -h ) ]]; then usage; exit 0; fi
+unset CDPATH
+script_path=$0
+while [[ -L $script_path ]]; do
+  link_dir=$(cd -P "$(dirname "$script_path")" && pwd)
+  script_path=$(readlink "$script_path")
+  [[ $script_path == /* ]] || script_path="$link_dir/$script_path"
+done
+script_root=$(cd -P "$(dirname "$script_path")/.." && pwd)
+caller_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+[[ -z $caller_root ]] || caller_root=$(cd -P "$caller_root" && pwd)
+super=$(git -C "$script_root" rev-parse --show-superproject-working-tree 2>/dev/null || true)
+if [[ -n $super ]]; then
+  super=$(cd -P "$super" && pwd)
+  [[ $script_root == "$super/base" ]] || refuse "The board script runs from arcade-base or from a game's base/"
+  [[ $caller_root == "$super" || $caller_root == "$script_root" ]] || refuse "Run the board script from inside the game's checkout"
+  root=$super as_base=true
+  [[ $(git -C "$root" ls-tree HEAD -- scripts/board.conf | cut -d' ' -f1) =~ ^100(644|755)$ ]] || refuse 'The game has no committed scripts/board.conf'
+  conf_text=$(git -C "$root" show HEAD:scripts/board.conf)
+else
+  script_git_dir=$(git -C "$script_root" rev-parse --absolute-git-dir 2>/dev/null || true)
+  [[ $script_git_dir != */.git/modules/* && $script_git_dir != */.git/worktrees/*/modules/* ]] || refuse "This base/ isn't part of a game checkout any more; run the board script from arcade-base or from a game whose branch pins base/"
+  [[ $caller_root == "$script_root" ]] || refuse 'Run the board script from its own checkout'
+  root=$script_root as_base=false
+  conf_text=$(<"$script_root/scripts/board.conf")
+fi
 repo='' owner='' title=''
 while IFS= read -r line || [[ -n $line ]]; do
   [[ $line =~ ^(repo|owner|title)=([A-Za-z0-9._/\ -]+)$ ]] || error 'Invalid board.conf entry'
   printf -v "${BASH_REMATCH[1]}" '%s' "${BASH_REMATCH[2]}"
-done < "$(dirname "$0")/board.conf"
+done <<< "$conf_text"
 [[ -n $repo && -n $owner && -n $title ]] || error 'Missing board.conf setting'
 [[ $repo =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ && $owner =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ && $title =~ [[:alnum:]] ]] || error 'Invalid board.conf value'
 version=$(gh --version)
@@ -239,9 +264,13 @@ if [[ $cmd == release ]]; then
 fi
 case "$cmd:${dry_run:-false}" in
  release:false|new:*|triage:*|effort:*|priority:*|move:*|start:*|result:*|decide:*|labels:*|parent:*|unparent:*|milestone:*|block:*|unblock:*)
-  [[ $(git symbolic-ref --quiet --short HEAD) == develop ]] || refuse 'Board writes require the develop branch'
-  [[ $(git rev-parse --show-toplevel) == "$(cd "$(dirname "$0")/.." && pwd -P)" ]] || refuse 'Run the board script from its own checkout'
-  dirty=$(git status --porcelain --untracked-files=no)
+  [[ $(git -C "$root" symbolic-ref --quiet --short HEAD) == develop ]] || refuse 'Board writes require the develop branch'
+  if $as_base; then
+    base_status=$(git -C "$root" submodule status -- base)
+    [[ ${base_status:0:1} == ' ' && -z $(git -C "$root/base" status --porcelain --untracked-files=all) && $(git -C "$root/base" rev-parse HEAD) == "$(git -C "$root" rev-parse HEAD:base)" ]] ||
+      refuse 'Board writes require base/ at its pinned commit'
+  fi
+  dirty=$(git -C "$root" status --porcelain --untracked-files=no)
   [[ -z $dirty ]] || refuse 'Board writes require a clean checkout'
   ;;
 esac
@@ -467,7 +496,7 @@ LABELS
       if [[ $dest == Next ]]; then ready; fi
       if [[ $dest == Playtest && $type != 'In-game check' ]]; then
         [[ -n ${3:-} ]] || refuse 'Requires --staged SHA'
-        [[ $3 =~ ^[0-9a-fA-F]{40}$ && $(git cat-file -t "$3" 2>/dev/null) == commit ]] || bad 'Expected full local commit SHA'
+        [[ $3 =~ ^[0-9a-fA-F]{40}$ && $(git -C "$root" cat-file -t "$3" 2>/dev/null) == commit ]] || bad 'Expected full local commit SHA'
         linked
         head=$(pr view "$pull" --json headRefOid --jq .headRefOid)
         [[ $head == "${3,,}" ]] || refuse 'Staged SHA differs from PR head'
