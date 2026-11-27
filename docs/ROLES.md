@@ -1,6 +1,6 @@
 # Who can do what
 
-This page covers the [Softbody Arcade](https://github.com/softbody-arcade) organization, the `arcade-base` repo (the shared library and tooling every Softbody Arcade game uses) and the [Softbody Arcade board](https://github.com/orgs/softbody-arcade/projects/1). The repo and the board are public. Tickets merge into `develop`, the default branch; `main` only receives releases. GitHub enforces the access rules below; the working rules on top of them are in [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
+This page covers the [Softbody Arcade](https://github.com/softbody-arcade) organization, the `arcade-base` repo (the shared library Softbody Arcade games will run on, and the tooling they share) and the [Softbody Arcade board](https://github.com/orgs/softbody-arcade/projects/1). The repo and the board are public. Tickets merge into `develop`, the default branch; `main` only receives releases. GitHub enforces the access rules below; the working rules on top of them are in [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## At a glance
 
@@ -50,7 +50,7 @@ What they normally do:
 3. For merged work they tested on `develop`, move the card: **Playtest → Accepted** when it passed, **Playtest → Build** when it didn't. For `In-game check` issues and unmerged changes, the comment is enough; the maintainer records the result.
 4. File a **Bug** for anything else they notice.
 
-They can also add new minigame ideas to the board as draft items (the **Game ideas** view). Bugs and ideas for an existing game, or for the base, start as an issue in its repo. Issues filed in `cops-and-robbers` land in Inbox by themselves; the board's one auto-add workflow covers only that repo, so issues filed in `arcade-base` are put on the board by the maintainer (`scripts/board new`, or by hand) until the board bot adds them. The green status badge on an issue page is GitHub's own issue status, not the board lane; the board lane is what counts.
+They can also add new minigame ideas to the board as draft items (the **Game ideas** view). Bugs and ideas for an existing game, or for the base, start as an issue in its repo. Issues filed in `cops-and-robbers` land in Inbox by themselves; the board's one auto-add workflow covers only that repo, so issues filed in `arcade-base` are put on the board by the maintainer with `gh project item-add 1 --owner softbody-arcade --url <issue URL>` (or **+ Add item** on the board) until the board bot adds them. `scripts/board new` is only for tickets the maintainer creates; it files a new issue and adds it itself. The green status badge on an issue page is GitHub's own issue status, not the board lane; the board lane is what counts.
 
 ## Contributors
 
@@ -98,7 +98,7 @@ An agent (Claude, Codex or any other) acts with the GitHub login of the person r
 
 | Automation | What it does | Rights |
 |---|---|---|
-| Board workflows | Put issues added to the board in Inbox (the board's one auto-add workflow covers Cops and Robbers, so new arcade-base issues are added with `scripts/board new` or by hand until the board bot adds them), move closed issues to Accepted and reopened ones back to Inbox, add sub-issues. `scripts/board release` (run by the maintainer) moves released and finished work to Done and archives closed Done cards after 14 days without updates | Board only |
+| Board workflows | Put issues added to the board in Inbox (the board's one auto-add workflow covers Cops and Robbers, so the maintainer adds arcade-base issues with `gh project item-add` or on the board until the board bot adds them), move closed issues to Accepted and reopened ones back to Inbox, add sub-issues. `scripts/board release` (run by the maintainer) moves released and finished work to Done and archives closed Done cards after 14 days without updates | Board only |
 | CI (`ci.yml`) | Runs the `test` and `privacy` checks on every PR and on pushes to `develop` and `main` | Read-only token |
 | Dependabot | Opens a PR each week when a GitHub Action has a new version, and raises security alerts | Opens PRs; a maintainer merges them |
 | Secret scanning | Blocks a push that contains a supported secret pattern, unless push protection is bypassed | Push protection on |

@@ -2,7 +2,7 @@
 
 This file is the single rule set for every contributor and every coding agent, whatever the provider. `CLAUDE.md` only includes it. The rules never require a harness-specific tool. "The maintainer" means the repo owner, ReinderN.
 
-The repo is `softbody-arcade/arcade-base`, in the `softbody-arcade` organization for BeamNG multiplayer minigames. It holds the shared library every Softbody Arcade game runs on, and the repo tooling the game repos share (the board script, privacy check, CI and these rules). [Cops and Robbers](https://github.com/softbody-arcade/cops-and-robbers) is the first game moving onto it.
+The repo is `softbody-arcade/arcade-base`, in the `softbody-arcade` organization for BeamNG multiplayer minigames. It is becoming the shared library Softbody Arcade games run on, and holds the repo tooling the game repos share (the board script, privacy check, CI and these rules). No game runs on it yet: [Cops and Robbers](https://github.com/softbody-arcade/cops-and-robbers) is the first to move onto it ([cops-and-robbers#56](https://github.com/softbody-arcade/cops-and-robbers/issues/56)).
 
 ## Tickets are the ledger
 
@@ -48,7 +48,7 @@ GitHub Issues and the organization board **Softbody Arcade** (project 1) record 
 - **Maintainers:** anything.
 - **Playtesters:** on a work card whose PR is already merged and was tested on `develop`: Playtest → Accepted when it passed, Playtest → Build when it didn't, with a comment saying what they saw. On an `In-game check` issue, or a staged PR that isn't merged, they only comment their result; the maintainer records it with `board result`, which needs the card in Playtest.
 - **Contributors:** their own assigned cards between Build and Review. Leaving Design stays the maintainer's call (plan approval).
-- **Everyone with board Write:** new minigame ideas go on the board as **draft items** (the **Game ideas** view). A draft becomes an issue in a game's repo once that game has one. Work on an existing game or the base starts as an issue in its repo. Issues filed in `cops-and-robbers` land in Inbox by themselves; the board's one auto-add workflow covers only that repo, so issues filed in `arcade-base` are put on the board by the maintainer (`scripts/board new`, or by hand) until the board bot adds them.
+- **Everyone with board Write:** new minigame ideas go on the board as **draft items** (the **Game ideas** view). A draft becomes an issue in a game's repo once that game has one. Work on an existing game or the base starts as an issue in its repo. Issues filed in `cops-and-robbers` land in Inbox by themselves; the board's one auto-add workflow covers only that repo, so issues filed in `arcade-base` are put on the board by the maintainer with `gh project item-add 1 --owner softbody-arcade --url <issue URL>` (or **+ Add item** on the board) until the board bot adds them. `scripts/board new` is only for tickets the maintainer creates; it files a new issue and adds it itself.
 - The green status badge on an issue page is GitHub's own issue status (Backlog, Done, …), not the board lane. Ignore it; the board lane is what counts.
 
 **Agent rules the script cannot check:**

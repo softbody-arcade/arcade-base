@@ -409,6 +409,7 @@ wrote '- [ ] High: Keep it.'
 wrote 'select(.name=="High")'
 EXISTING_COMMENT=$'Playtest fail\n' EXISTING=22 TYPE='In-game check' expect 0 '' result 1 fail
 ! wrote 'issue create' || exit 1
+wrote 'project item-add 9 --owner softbody-arcade --url https://github.com/softbody-arcade/arcade-base/issues/22' || exit 1
 ! wrote 'issue comment' || exit 1
 EXISTING_COMMENT="Playtest fail for #1 at $HEAD_SHA"$'\n' expect 0 '' result 1 fail
 ! wrote 'pr comment' || exit 1

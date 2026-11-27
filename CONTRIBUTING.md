@@ -1,6 +1,6 @@
 # Contributing to Arcade Base
 
-Thanks for helping. Arcade Base is the shared library and tooling every [Softbody Arcade](https://github.com/softbody-arcade) minigame for BeamNG.drive multiplayer (BeamMP) runs on.
+Thanks for helping. Arcade Base is becoming the shared library [Softbody Arcade](https://github.com/softbody-arcade) minigames for BeamNG.drive multiplayer (BeamMP) run on, and holds the repo tooling they share. No game runs on it yet; Cops and Robbers moves onto it first.
 
 The full rules, for people and for coding agents alike, are in [AGENTS.md](AGENTS.md). This page is the short version, and [Roles](docs/ROLES.md) explains what each team can do.
 
