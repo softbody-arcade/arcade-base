@@ -8,7 +8,8 @@ refuse() {
 
 version="${1:-}"
 sha="${2:-}"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || refuse "usage: publish-release x.y.z <commit sha>"
+part="(0|[1-9][0-9]*)"
+[[ "$version" =~ ^$part[.]$part[.]$part$ ]] || refuse "usage: publish-release x.y.z <commit sha> (no leading zeros)"
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || refuse "expected a full commit sha, got: $sha"
 [[ -n "${GH_REPO:-}" ]] || refuse "set GH_REPO to owner/repo"
 tag="v$version"

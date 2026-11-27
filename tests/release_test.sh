@@ -280,7 +280,7 @@ case "$*" in
   "release edit "*) echo false > "$state/draft" ;;
   "release create "*) [[ " $* " == *" --verify-tag "* && -f $state/refs/tags/$3 ]] || exit 1; mkdir -p "$state/release"; echo false > "$state/draft"; echo false > "$state/pre"; printf '%s\n' "$@" > "$state/created" ;;
   "api --paginate repos/test/repo/milestones"*) echo 7 ;;
-  "api --method PATCH repos/test/repo/milestones/7"*) touch "$state/milestone-closed" ;;
+  "api --method PATCH repos/test/repo/milestones/7 -f state=closed") touch "$state/milestone-closed" ;;
   *) exit 1 ;;
 esac
 STUB
@@ -333,6 +333,32 @@ PUB_STATE="$state" GH_REPO=test/repo PATH="$pub/bin:$PATH" "$ROOT/scripts/publis
 echo $? > "$tmp/status"
 set -e
 check "publish refuses a missing commit" '[[ $(cat "$tmp/status") == 1 && ! -e $state/log ]]'
+
+state="$pub/leading-zero"; mkdir -p "$state"
+set +e
+PUB_STATE="$state" GH_REPO=test/repo PATH="$pub/bin:$PATH" "$ROOT/scripts/publish-release" 01.2.3 "$sha" > "$tmp/out" 2>&1
+echo $? > "$tmp/status"
+set -e
+check "publish refuses a version with a leading zero" '[[ $(cat "$tmp/status") == 1 && ! -e $state/log ]]'
+
+select_script="$tmp/select.sh"
+awk '/^      - id: select$/ {found = 1} found && /^        run: \|$/ {inrun = 1; next} inrun && /^          / {print substr($0, 11); next} inrun {exit}' "$ROOT/.github/workflows/release.yml" > "$select_script"
+select_run() {
+  set +e
+  : > "$tmp/output"
+  env "$@" GITHUB_OUTPUT="$tmp/output" GITHUB_REPOSITORY=test/repo PATH="$pub/bin:$PATH" bash -euo pipefail "$select_script" > "$tmp/out" 2>&1
+  echo $? > "$tmp/status"
+  set -e
+}
+check "the workflow's select step was extracted" 'grep -q "GITHUB_OUTPUT" "$select_script"'
+select_run GITHUB_EVENT_NAME=pull_request HEAD_REF=release/1.2.3 MERGE_SHA="$sha"
+check "select picks the version of a release branch" '[[ $(cat "$tmp/status") == 0 ]] && grep -qx "version=1.2.3" "$tmp/output" && grep -qx "sha=$sha" "$tmp/output"'
+select_run GITHUB_EVENT_NAME=pull_request HEAD_REF=feature/x MERGE_SHA="$sha"
+check "select skips a branch that isn't a release" '[[ $(cat "$tmp/status") == 0 && ! -s $tmp/output ]]'
+select_run GITHUB_EVENT_NAME=pull_request HEAD_REF=release/01.2.3 MERGE_SHA="$sha"
+check "select refuses a release branch with a leading zero" '[[ $(cat "$tmp/status") != 0 && ! -s $tmp/output ]]'
+select_run GITHUB_EVENT_NAME=workflow_dispatch VERSION=01.2.3
+check "select refuses a manual version with a leading zero" '[[ $(cat "$tmp/status") != 0 && ! -s $tmp/output ]] && grep -q "Expected version x.y.z" "$tmp/out" && ! grep -q "^pr list" "$pub/new/log"'
 
 if ((failures)); then
   echo "$failures release checks failed"
