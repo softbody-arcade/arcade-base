@@ -48,6 +48,8 @@ All are comments on [#1](https://github.com/softbody-arcade/arcade-base/issues/1
 9. **Stability.** The base stays at 0.x while one game uses it: any 0.x release may change the contract and a game pins an exact base version. The rule "a minor release never breaks a game" starts at 1.0, once a second game runs on it.
 10. **Existing data.** Cops and Robbers 3.0.0 starts fresh.
 11. **Installing and versions** (earlier decisions): a server installs the base plus one mod per game; games include the base as a submodule at `base/` pinned to a release; the base checks every installed game's required version at start and leaves out games that don't match, saying why.
+12. **Round conditions.** All of Cops and Robbers' conditions move to the base as manager services any game uses: time of day and day length, weather and its changes during a round, rain grip, wind, lightning, street lights and traffic. Cops and Robbers keeps only what is about its rules, such as how weather affects cop sight.
+13. **Server version.** The base requires BeamMP Server 3.9.3 or newer and checks it at start.
 
 ## How it works
 
@@ -66,7 +68,10 @@ All are comments on [#1](https://github.com/softbody-arcade/arcade-base/issues/1
 | Player settings | Colour and global preferences, the card | Declares its own section (siren, route to the runner, …) |
 | Leaderboard | Stores round records per game; the app | Writes its round records; supplies how they are ranked and shown |
 | HUD, announcements, alerts | The apps and their layout; generic parts (timers, notices, countdowns) | Content: its HUD parts, alerts, How to play text |
-| Round conditions, traffic, road search | Plain modules any game calls | Calls them |
+| Round conditions (time, day length, weather and its changes, rain grip, wind, lightning, street lights) and traffic | Services with state: the manager sets them for a round from the settings snapshot and restores them after | Reads them; may ask for changes through the service (Cops and Robbers' sight uses them) |
+| Road search | A plain module any game calls | Calls it |
+| Starting a round | Any player presses Start in the panel, or automatic rounds start the next one; the manager checks the game's minimum players | Declares its minimum players; may refuse to start with a reason (for example no runner chosen) |
+| World changes outside the services (scene objects, vehicle decorations, extra cameras) | A registry: the game creates them through the manager, which removes them on cleanup | Uses the registry; never changes the world directly |
 | Vehicle spawn and edit checks | Receives the BeamMP events; asks the active game | Answers allow or refuse, synchronously |
 | Cleanup | Owns it: after every round, switch or failure, returns every player to the lobby state on server and client | Cleans up its own state; the manager doesn't rely on it |
 
@@ -99,6 +104,11 @@ The manager defines the apps, as today: panel (settings, game switcher, round co
 - **HUD:** generic parts (lines, timers, bars, distances, role chips) the game fills; the manager places them.
 - **Alerts and announcements:** the game's own texts and styles from a fixed set.
 - **How to play:** the game's text.
+- **Actions:** buttons and cards with buttons the game defines (for example Cops and Robbers' runner picker, its queued evolving change with Apply, its practice buttons); pressing one calls the game's handler through the manager, which checks the session number and who may press it.
+
+The panel keeps its tabs as manager tabs filled by the game: **Round** (Start, End, the game switcher, the game's round actions), **Car** (the manager's car picking, plus the game's section, such as the evolving build), **Map** (the game's map content, such as Cops and Robbers' gas stations, using the base's road search) and **Settings** (global settings, then the game's). The HUD's change card is the game's content drawn with the generic parts and actions.
+
+**Proposed:** during the 2.x split the apps keep their current ids and are made data-driven step by step; they get the manager's names at 3.0.0. Players' saved app placements reset then, which fits the fresh start (decision 10).
 
 **Choice left to the builder:** the exact list of HUD parts and alert styles, as long as Cops and Robbers' current HUD and announcements can be drawn from them.
 
@@ -119,7 +129,8 @@ The base offers tools: spawn and place a car, pick one (random from the allowed 
 ### Failure and cleanup
 
 - Every call from the manager into a game is protected (`pcall` on the server; the same on the client). An error ends the round with a notice and the manager's own cleanup.
-- **The manager's cleanup doesn't depend on the game:** on the server it stops the round's timers and removes its AI and traffic; on each client it releases input and spawn locks, frees the camera, restores the sky and weather, removes the round's HUD parts and returns the player to the lobby.
+- **The manager's cleanup doesn't depend on the game:** on the server it stops the round's timers and removes its AI and traffic; on each client it releases input and spawn locks, frees the camera, resets the round-condition services (time, sky, weather, wind, grip, lightning, street lights), removes everything in the world-change registry, removes the round's HUD parts and returns the player to the lobby.
+- **Proposed rule:** a game changes shared world state only through the manager's services and registry, so everything it changed can be undone. The plan lists every side effect in today's Cops and Robbers code (lightning scene objects, wind, surface grip, street lights, helicopter objects, own lights and light bars, …) and where each one goes.
 - **Proposed:** a game that failed stays selectable; the error is in the server log and in the notice, and the maintainer decides what to fix. A hang (a game that never returns) is not caught by `pcall`; the builder keeps game calls short and the tick budget is checked in tests.
 
 ## Loading
@@ -141,27 +152,30 @@ All mods on the server are downloaded by every player, and all GE extensions sha
 - The base stays 0.x until a second game runs on it; a game pins an exact base version (decision 9).
 - A game's manifest declares the base version it needs; at start the manager leaves out a game that doesn't match and says why in the server log and the panel.
 - **Proposed:** each client reports the versions of the base and game mods it loaded on join; a mismatch with the server is shown to that player, as Cops and Robbers' outdated-mod warning does today.
+- The manager checks the BeamMP Server version at start and refuses to run below 3.9.3 (decision 13).
 - Shared Lua runs on the server under Lua 5.3 and on the client under LuaJIT, so modules used on both sides stay within what both support, and the base's tests run them under both.
 
 ## Order of work
 
 Decision 8 sets the order. Each step is its own ticket and release.
 
-1. **Cops and Robbers 2.x: split along the seam, in its own repo.** Behind the contract in this spec, separate the manager half (roster, lobby, ready-up, sit out, spectating, settings and their storage, car tools, leaderboard store, cleanup) from the game half (round phases, roles, catch, sight, helicopter, evolving mode's rules, its settings and HUD content). Rename events to a manager prefix and a game prefix. Each step is a 2.x release with a playtest. Before the first step, record event traces of scripted rounds, and compare after each step.
-2. **Probe the engine** (below) on the local test server, before the base takes code.
-3. **arcade-base 0.x: the manager half moves in**, with a small test-only second game that has two rounds per series, to prove switching, series blocking and cleanup aren't shaped by Cops and Robbers. Packaging and staging for two mods.
-4. **Cops and Robbers 3.0.0: the switch.** Its manager half is removed and it runs as a game on the base, pinned to that base release. A clean install (a leftover 2.x `main.lua` would otherwise still run), fresh data.
-5. **Player-settings card redesign and the game switcher UI** come after the move, not in it.
+0. **Probe the engine first** (below), on the local test server, before the split commits to a seam. Each probe has a fallback, so a failed probe changes the plan, not the decisions.
+1. **Cops and Robbers 2.x: split along the seam, in its own repo.** Behind the contract in this spec, separate the manager half (roster, lobby, ready-up, sit out, spectating, settings and their storage, round-condition services and traffic, car tools, leaderboard store, cleanup) from the game half (round phases, roles, catch, sight, helicopter, evolving mode's rules, its settings and HUD content). Rename events to a manager prefix and a game prefix. Each step is a 2.x release with a playtest. Before the first step, record event traces of scripted rounds, and compare after each step.
+2. **arcade-base 0.x: the manager half moves in**, with a small test-only second game that has two rounds per series, to prove switching, series blocking and cleanup aren't shaped by Cops and Robbers. Packaging and staging for two mods.
+3. **Cops and Robbers 3.0.0: the switch.** Its manager half is removed and it runs as a game on the base, pinned to that base release. A clean install (a leftover 2.x `main.lua` would otherwise still run), fresh data.
+4. **Player-settings card redesign and the game switcher UI** come after the move, not in it.
+
+**Proposed:** once the manager half has moved into the base (step 2), Cops and Robbers 2.x freezes its copy: manager fixes go to the base, and only an urgent fix for players is made in both until 3.0.0.
 
 ## Engine assumptions to check
 
 Each is a probe on the local test server before the code depends on it:
 
-1. Two plugin folders with the same `LuaStateID` share one state; a module in one folder can be `require`d from the other; `onInit` fires once after both have loaded.
-2. What a hot reload of either folder does in the shared state, mid-round.
-3. A GE extension can be loaded and unloaded at runtime by another extension, with its hooks and UI bindings gone after unloading.
-4. The manager's apps can show game-provided content (data, not code) without a client restart when the game is switched.
-5. A player's client can report which mod versions it loaded.
+1. Two plugin folders with the same `LuaStateID` share one state; a module in one folder can be `require`d from the other; `onInit` fires once after both have loaded. **Fallback:** the game's folder has no top-level script and the manager loads its modules with `require` into its own state (also synchronous). If neither works: separate plugins, and vehicle checks answered by the manager from rules the game declares in advance.
+2. What a hot reload of either folder does in the shared state, mid-round. **Fallback:** document that reloads end the round; the manager cleans up.
+3. A GE extension can be loaded and unloaded at runtime by another extension, with its hooks and UI bindings gone after unloading. **Fallback:** every game's extension stays loaded but dormant: it does nothing until the manager activates it, and it only reaches inputs, apps and the world through the manager's services.
+4. The manager's apps can show game-provided content (data, not code) and switch to another game's content without a client restart. **Fallback:** the manager re-sends a full snapshot and the apps redraw from it, as they do today on join.
+5. A player's client can report which mod versions it loaded. **Fallback:** the outdated-mod check stays as Cops and Robbers does it today, moved into the manager.
 
 ## Automated acceptance
 
