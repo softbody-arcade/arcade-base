@@ -1,0 +1,25 @@
+{
+  "domElement": "<arcade-probe></arcade-probe>",
+  "name": "Arcade Probe",
+  "types": [
+    "ui.apps.categories.info"
+  ],
+  "description": "Temporary engine probe for the arcade manager.",
+  "css": {
+    "left": "2em",
+    "right": "",
+    "top": "10em",
+    "bottom": "",
+    "width": "20em",
+    "height": "12em",
+    "min-width": "12em",
+    "min-height": "6em"
+  },
+  "author": "ReinderN",
+  "version": "1.0",
+  "directive": "arcadeProbe",
+  "vue": true,
+  "category": "Gameplay",
+  "isAuxiliary": true,
+  "interactive": "required"
+}
