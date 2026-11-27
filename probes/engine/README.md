@@ -69,7 +69,7 @@ Record for each case: the round id before and after, `inits` and `loads` from `/
 **Decides:**
 
 - (a) and (b), each with its reload line seen: the round id survives both → main path. It doesn't (`round=none`, or a new `loads=1`) → the spec's fallback: reloads end the round.
-- (c): the `file changed` and `cache cleared` lines appeared and the ordinary `/probe rule` returns `v2` with the round id unchanged → main path: the manager clears the module cache from `onFileChanged`. No `file changed` line, or `/probe rule` still `v1`, while `/probe rule fresh` gives `v2` → the event doesn't arrive or arrives too late, so nested edits need the manager's own reload; record it for the plan. Both `v1` → nested edits need a server restart.
+- (c): the `file changed` and `cache cleared` lines appeared and the ordinary `/probe rule` returns `v2` with the round id unchanged → main path: the manager clears the module cache from `onFileChanged`. The ordinary `/probe rule` still `v1` while `/probe rule fresh` gives `v2` → the event doesn't arrive or arrives too late, so nested edits need the manager's own reload; record it for the plan. Both `v2` without a `file changed` line → the edit took effect but nothing seen here cleared the cache; record it for the plan as "nested edits reach the code, mechanism unknown". Both `v1` → nested edits need a server restart.
 
 ## Probe 3: extension load and unload
 

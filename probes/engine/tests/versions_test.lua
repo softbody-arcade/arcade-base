@@ -62,6 +62,37 @@ check("an inactive record reports missing", report.game == "missing")
 local _, calledWithArg = run({})
 check("getters that take parameters are not called", not calledWithArg)
 
+local varargCalled = false
+run({}, { getAnything = function(...) varargCalled = true return {} end })
+check("getters with variadic parameters are not called", not varargCalled)
+
+report = run({
+  arcadeprobe = { modname = "arcadeprobe", modData = { version_string = "0.0.1" } },
+}, {
+  getZList = function()
+    return {
+      arcadeprobe = { modname = "arcadeprobe", active = true, modData = { version_string = "0.0.1" } },
+      arcadeprobegame = { modname = "arcadeprobegame", active = true, modData = { version_string = "0.0.2" } },
+    }
+  end,
+})
+check("a later getter's confirmed versions win over an earlier unconfirmed one", report.base == "0.0.1" and report.game == "0.0.2")
+
+report = run({
+  arcadeprobe = { modname = "arcadeprobe", active = true },
+}, {
+  getZList = function()
+    return { arcadeprobe = { modname = "arcadeprobe", active = true, modData = { version_string = "0.0.1" } } }
+  end,
+})
+check("an active record without a version doesn't hide a versioned one", report.base == "0.0.1")
+
+report = run({
+  arcadeprobe = { modname = "arcadeprobe", active = true, modData = { version_string = "0.0.1" } },
+  myarcadeprobegame = { modname = "myarcadeprobegame", active = true, modData = { version_string = "0.0.2" } },
+})
+check("an unrelated mod whose name ends like a probe is ignored", report.game == "missing")
+
 if failures > 0 then
   print(failures .. " version checks failed")
   os.exit(1)

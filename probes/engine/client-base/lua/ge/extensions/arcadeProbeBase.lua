@@ -36,6 +36,13 @@ local function sortedKeys(t)
   return keys
 end
 
+local PROBE_NAMES = {
+  arcadeprobe = "base",
+  multiplayerarcadeprobe = "base",
+  arcadeprobegame = "game",
+  multiplayerarcadeprobegame = "game",
+}
+
 local function findVersions(list)
   local found = {}
   for key, mod in pairs(list) do
@@ -43,15 +50,15 @@ local function findVersions(list)
       local name = tostring(mod.modname or mod.name or key)
       local data = type(mod.modData) == "table" and mod.modData or mod
       local version = data.version_string or data.version or mod.version_string or mod.version
-      local lower = name:lower()
-      local which = (lower:sub(-15) == "arcadeprobegame" and "game") or (lower:sub(-11) == "arcadeprobe" and "base") or nil
+      local which = PROBE_NAMES[name:lower()]
       if which then
         local evidence = (mod.active == true and "active") or (mod.mounted == true and "mounted") or ((mod.active == false or mod.mounted == false) and "inactive") or "unknown"
         say("mod " .. name .. " as=" .. which .. " evidence=" .. evidence .. " version=" .. tostring(version) .. " fields=" .. table.concat(sortedKeys(mod), ","))
-        if evidence == "active" or evidence == "mounted" then
-          found[which] = tostring(version)
-        elseif evidence == "unknown" and found[which] == nil then
-          found[which] = "unconfirmed " .. tostring(version)
+        if evidence ~= "inactive" then
+          local confirmed = (evidence == "active" or evidence == "mounted") and version ~= nil
+          if confirmed or found[which] == nil then
+            found[which] = { version = tostring(version), confirmed = confirmed }
+          end
         end
       end
     end
@@ -68,6 +75,7 @@ end
 
 function M.versions()
   local report = { base = "missing", game = "missing", source = "none" }
+  local confirmed = {}
   local mm = core_modmanager
   if type(mm) ~= "table" then
     say("modmanager keys=missing")
@@ -76,16 +84,19 @@ function M.versions()
     for _, key in ipairs(sortedKeys(mm)) do
       local fn = mm[key]
       local info = type(fn) == "function" and debug.getinfo(fn, "u") or nil
-      if info and key:sub(1, 3) == "get" and (info.nparams or 0) == 0 then
+      if info and key:sub(1, 3) == "get" and info.nparams == 0 and info.isvararg == false then
         local ok, result = pcall(fn)
         local size = type(result) == "table" and #sortedKeys(result) or "-"
         say("modmanager " .. key .. " ok=" .. tostring(ok) .. " type=" .. type(result) .. " count=" .. tostring(size))
-        if ok and type(result) == "table" and report.source == "none" then
-          local found = findVersions(result)
-          if next(found) then
-            report.source = key
-            report.base = found.base or "missing"
-            report.game = found.game or "missing"
+        if ok and type(result) == "table" then
+          for which, entry in pairs(findVersions(result)) do
+            if entry.confirmed and not confirmed[which] then
+              confirmed[which] = true
+              report[which] = entry.version
+              if report.source == "none" then report.source = key end
+            elseif not confirmed[which] and report[which] == "missing" then
+              report[which] = "unconfirmed " .. entry.version
+            end
           end
         end
       end
