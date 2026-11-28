@@ -930,6 +930,9 @@ MOVE_FAIL=1 expect 2 'move failed' release
   ordered 'archiveProjectV2Item' 'issue edit 7'
   ordered 'issue edit 7' "api repos/$repo/issues/8"
   fresh
+  ISSUES='{"softbody-arcade/arcade-base#7":{"milestone":{"title":"1.0.0","state":"open"}}}' expect 0 '' release
+  absent 'issue edit 7 '
+  fresh
   RELEASE_TAG= expect 0 '#7 moved to 1.1.0' release
   fresh
   MILESTONES='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"closed"}]}' MS_ISSUES='{}' expect 0 '' release

@@ -35,7 +35,7 @@ A milestone is the earliest release an issue could ship in, not a promise. What 
 
 This amends the roadmap decision on #47, which treated assigning a milestone as committing to a release. The amendment follows from the maintainer choosing that every issue outside Inbox has a version: with 40-odd Backlog issues, a version cannot be a commitment. The rule text in `AGENTS.md` changes to match, and the decision is recorded on #48 and indexed (see Rules).
 
-Milestones belong to one repo. A game's `0.2.0` and the base's `0.2.0` are unrelated milestones with the same name. A game issue that needs a base release records it as blocked-by on the base issue and names the base version in its text or in its milestone description.
+Milestones belong to one repo. A game's `0.2.0` and the base's `0.2.0` are unrelated milestones with the same name. A game issue that needs a base release is blocked by the base issue (the dependency is set on the game issue, with the base issue as the blocker) and names the base version in its text or in its milestone description.
 
 ## Approaches
 
@@ -71,7 +71,7 @@ It prints the version it used and whether it was given, kept or defaulted.
 
 | Command | Change |
 |---|---|
-| `triage N TYPE PRIORITY [EFFORT] [--milestone x.y.z]` | Uses the helper, for an open issue; a closed card sets type, priority and effort as before. Applies to an Inbox card and to a card in any other lane, so a re-triage fixes a released or missing version. `--milestone` is a trailing option. |
+| `triage N TYPE PRIORITY [EFFORT] [--milestone x.y.z]` | Uses the helper, for an open issue; a closed card sets type, priority and effort as before, and `--milestone` on a closed card is refused with `A closed issue takes no version`. Applies to an Inbox card and to a card in any other lane, so a re-triage fixes a released or missing version. `--milestone` is a trailing option. |
 | `new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] [--milestone x.y.z]` | Both trailing options may come in either order, each once, after the title. When a priority is given (the card goes to Backlog) the version is resolved before the issue exists, so there is no current milestone and no "kept": `--milestone` if given, else the repo's earliest valid open milestone, else refuse with the same message as the helper, before anything is created. The milestone is passed to `issue create`. `new` without a priority goes to Inbox and is exempt; a `--milestone` given with it is still applied. |
 | `move N <lane>`, `start N` | For an open issue, `classified`, which already runs for every move whose destination is not Inbox, also requires a valid open version and refuses otherwise, with no write. This covers Backlog to Next, `start`, and the rework and re-stage moves. A card in Backlog that lost its milestone, or never had one, cannot advance until it is fixed. `move N inbox` needs no version and stays available for recovery, as do `priority`, `effort`, `parent`, `unparent`, `block`, `unblock` and `decide`. |
 | `move N playtest` for an In-game check from Inbox, Backlog or Next | This shortcut skips `classified` today and gets its own sequence, the same from every source lane: resolve with the helper (no option, so an override is `board milestone` first); if nothing resolves, refuse before writing anything; otherwise assign the version, then write Effort when it is missing, then write Status. Never Effort or Status before the version is assigned. |
