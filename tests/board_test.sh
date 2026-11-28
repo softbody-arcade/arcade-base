@@ -121,8 +121,8 @@ case "$*" in
     endpoint=${3#repos/}; repo_key=${endpoint%%/milestones*}
     milestones=${MILESTONES:-'{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"open"}]}'}
     raced=$(sed -n 's/^api -X POST repos\/.*\/milestones .*title=\([^ ]*\).*/\1/p' "$LOG.all" | tail -n 1)
-    jq -n --argjson data "$milestones" --arg repo "$repo_key" --arg raced "$raced" --arg exists "${POST_EXISTS:-}" --arg race_state "${RACE_STATE:-open}" '
-      ($data[$repo] // []) + (if $exists == "1" and $raced != "" then [{number:999,title:$raced,state:$race_state}] else [] end)' | api_response "${@:4}"
+    jq -n --argjson data "$milestones" --arg repo "$repo_key" --arg raced "$raced" --arg exists "${POST_EXISTS:-}" --arg race_state "${RACE_STATE:-open}" --arg race_none "${RACE_NONE:-}" '
+      ($data[$repo] // []) + (if $exists == "1" and $raced != "" and $race_none != "1" then [{number:999,title:$raced,state:$race_state}] else [] end)' | api_response "${@:4}"
     ;;
   'api --paginate '*'/issues?milestone='*)
     endpoint=${3#repos/}; repo_key=${endpoint%%/issues*}; query=${endpoint#*milestone=}; ms_num=${query%%&*}
@@ -134,7 +134,7 @@ case "$*" in
     done
     ;;
   'api -X POST repos/'*'/milestones '*)
-    if [[ ${POST_EXISTS:-} == 1 ]]; then echo 'already exists (HTTP 422)' >&2; exit 1; fi
+    if [[ ${POST_EXISTS:-} == 1 ]]; then echo '{"message":"Validation Failed","errors":[{"resource":"Milestone","code":"already_exists","field":"title"}]}'; echo 'gh: Validation Failed (HTTP 422)' >&2; exit 1; fi
     if [[ ${POST_FAIL:-} == 1 ]]; then echo 'POST failed' >&2; exit 1; fi
     echo '{}'
     ;;
@@ -212,7 +212,6 @@ fresh() { : > "$LOG"; : > "$LOG.all"; : > "$LOG.state"; }
 fresh
 rc=0; EDIT_FAIL=5 gh issue edit 5 --milestone 1.0.0 --repo softbody-arcade/arcade-base >/dev/null 2>&1 || rc=$?
 [[ $rc == 7 ]] || { echo 'Stub: EDIT_FAIL did not fire' >&2; exit 1; }
-[[ -z $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq '.milestone.title | select(. == "9.9.9")') ]]
 rc=0; EDIT_FAIL=5 gh issue edit 5 --milestone 9.9.9 --repo softbody-arcade/arcade-base >/dev/null 2>&1 || rc=$?
 [[ $rc == 7 ]] || { echo 'Stub: failed edit did not fail' >&2; exit 1; }
 [[ $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq .milestone.title) == 1.0.0 ]] || { echo 'Stub: a failed edit changed the milestone' >&2; exit 1; }
@@ -418,6 +417,8 @@ ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue edit 1
 MILESTONES='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.2.0","state":"closed"}]}' guard 'Milestone 1.2.0 is already released' milestone 1 1.2.0
 expect 0 '' milestone 1 1.0.0
 absent 'api -X POST'
+wrote 'issue edit 1 --milestone 1.0.0'
+EDIT_FAIL=1 expect 2 '' milestone 1 1.0.0
 fresh
 POST_EXISTS=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 0 '' milestone 1 1.2.0
 wrote 'issue edit 1 --milestone 1.2.0'
@@ -427,9 +428,16 @@ absent 'issue edit'
 fresh
 POST_FAIL=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 2 'POST failed' milestone 1 1.2.0
 absent 'issue edit'
+POST_EXISTS=1 RACE_NONE=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 2 'already_exists' milestone 1 1.2.0
+absent 'issue edit'
 expect 0 'milestone N x.y.z|none' --help
 LANE=Backlog guard 'An open issue outside Inbox needs a version' milestone 1 none
 LANE=- guard 'An open issue outside Inbox needs a version' milestone 1 none
+CARD_COUNT=0 guard 'An open issue outside Inbox needs a version' milestone 1 none
+ISSUE_STATE=closed LANE=Backlog expect 0 '' milestone 1 none
+wrote 'issue edit 1 --remove-milestone'
+CARD_COUNT=0 STATE=CLOSED expect 0 '' milestone 1 none
+wrote 'issue edit 1 --remove-milestone'
 LANE=Inbox expect 0 '' milestone 1 none
 wrote 'issue edit 1 --remove-milestone'
 STATE=CLOSED expect 0 '' milestone 1 none

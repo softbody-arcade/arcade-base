@@ -170,18 +170,18 @@ repo_milestones() {
   gh api --paginate "repos/$repo/milestones?state=all&per_page=100" --jq '.[] | [.number,.title,.state] | @tsv'
 }
 ensure_milestone() {
-  local version=$1 rows number title state output
+  local version=$1 rows number ms_title state output
   rows=$(repo_milestones)
-  while IFS=$'\t' read -r number title state; do
-    [[ $title == "$version" ]] || continue
+  while IFS=$'\t' read -r number ms_title state; do
+    [[ $ms_title == "$version" ]] || continue
     [[ $state == open ]] || refuse "Milestone $version is already released"
     return
   done <<< "$rows"
   if output=$(command gh api -X POST "repos/$repo/milestones" -f "title=$version" 2>&1); then return; fi
-  if [[ $output == *'already exists'* ]]; then
+  if [[ $output == *already_exists* || $output == *'already exists'* ]]; then
     rows=$(repo_milestones)
-    while IFS=$'\t' read -r number title state; do
-      [[ $title == "$version" ]] || continue
+    while IFS=$'\t' read -r number ms_title state; do
+      [[ $ms_title == "$version" ]] || continue
       [[ $state == open ]] || refuse "Milestone $version is already released"
       return
     done <<< "$rows"
