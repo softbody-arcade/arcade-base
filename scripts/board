@@ -116,7 +116,7 @@ cards() {
     assignees(first:100){nodes{login}} issueDependenciesSummary{blockedBy}
     closedByPullRequestsReferences(first:20){nodes{url}}}}}}}}}' --jq '
     .data.'"$namespace"'.projectV2.items.nodes[] | select(.content.number != null) |
-    [.content.repository.nameWithOwner,.content.number,(.status.name // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Priority")|.name][0] // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Effort")|.name][0] // "-"),(.content.issueType.name // "-"),((.content.milestone.title // "-")|gsub("[|]";"／")),
+    [.content.repository.nameWithOwner,.content.number,(.status.name // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Priority")|.name][0] // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Effort")|.name][0] // "-"),(.content.issueType.name // "-"),((.content.milestone.title // "-")|gsub("[|\n\r]";"／")),
     (.content.milestone.state // "-"),
     ([.content.labels.nodes[].name | select(.=="needs-decision")]|join(",")),
     ([.content.assignees.nodes[].login]|join(",")),([.content.closedByPullRequestsReferences.nodes[].url]|join(",")),

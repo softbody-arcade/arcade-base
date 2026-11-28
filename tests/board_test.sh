@@ -605,10 +605,12 @@ LANE=Playtest expect 0 '' move 1 playtest --staged "$HEAD_SHA"
 wrote "pr comment 42 --body Staged for playtest (#1): $HEAD_SHA"
 MS_NONE=1 LANE=Backlog expect 1 '#1 missing version' check
 MS_STATE=CLOSED LANE=Backlog expect 1 '#1 version 1.0.0 is already released' check
-for title in '1.0.0; touch pwned' '$(touch "$tmp/pwned")' -; do
+for title in '1.0.0; touch pwned' "\$(touch \"$tmp/pwned\")" -; do
   MS_TITLE="$title" LANE=Backlog expect 1 "#1 version \"$title\" is not x.y.z" check
   [[ ! -e pwned && ! -e $tmp/pwned ]]
 done
+MS_TITLE=Later MS_STATE=CLOSED LANE=Backlog expect 1 '#1 version "Later" is not x.y.z' check
+MS_TITLE=$'bogus\nx' MS_STATE=CLOSED LANE=Backlog expect 1 '#1 version "bogus／x" is not x.y.z' check
 MS_NONE=1 LANE=Accepted expect 1 '#1 missing version' check
 MS_STATE=CLOSED LANE=Inbox expect 0 '' check
 MS_NONE=1 STATE=CLOSED LANE=Backlog expect 0 '' check
@@ -620,9 +622,15 @@ for source in Inbox Backlog Next; do
   fresh
   TYPE='In-game check' SIZE=- LANE=$source MS_NONE=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' guard 'No open version milestone: pass --milestone x.y.z or run board milestone 1 x.y.z' move 1 playtest
 done
+for source in Inbox Backlog Next; do
+  fresh
+  TYPE='In-game check' STATE=CLOSED LANE=$source MS_NONE=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 0 '' move 1 playtest
+  wrote '--field Status --value Playtest'
+  absent 'issue edit 1 --milestone'
+done
 fresh
-TYPE='In-game check' STATE=CLOSED MS_NONE=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 0 '' move 1 playtest
-! wrote 'issue edit 1 --milestone' || exit 1
+TYPE='In-game check' SIZE=Low LANE=Backlog MS_NONE=1 expect 0 '' move 1 playtest
+ordered 'issue edit 1 --milestone' '--field Status --value Playtest'
 LANE=Playtest TYPE='In-game check' expect 0 '' move 1 backlog
 wrote '--field Status --value Backlog'
 LANE=Playtest expect 1 'Playtest' move 1 backlog
