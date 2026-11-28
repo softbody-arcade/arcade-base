@@ -73,6 +73,7 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
   "name": "Cops and Robbers",
   "version": "3.1.0",
   "needsBase": "0.4.0",
+  "upgradesFrom": "3.0.0",
   "server": ["CopsAndRobbers"],
   "client": ["CopsAndRobbers.zip"],
   "keep": ["CopsAndRobbers/config.json", "CopsAndRobbers/data"],
@@ -83,18 +84,20 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
 - `id` matches the repo name; `version` matches the tag without its `v`.
 - `needsBase` is what the game's manifest in Lua declares (an exact version while the base is 0.x, decision 9 of the [manager spec](2026-11-27-arcade-manager-design.md); a range from 1.0). The release workflow generates `release.json` from the same source, and a test checks they agree. The base's own `release.json` has no `needsBase`.
 - `server` and `client` name every folder and ZIP the package owns. An install replaces exactly these, as a whole, so files a newer release removed don't linger.
-- `keep` lists the paths inside those folders carried over from the installed version (when present) instead of taken from the release. The manager spec proposes storing settings outside the install folders; once a package does that, its `keep` can shrink to nothing. An install carries over the installed version's `keep` paths as well as the new release's, so a release that drops a path from `keep` (because it moved those settings elsewhere) still finds the old file on its first run and moves the values itself; the release after it no longer receives the file.
+- `keep` lists the paths inside those folders carried over from the installed version (when present) instead of taken from the release. The manager spec proposes storing settings outside the install folders; once a package does that, its `keep` can shrink to nothing.
+- **Retiring a `keep` path.** An install carries over the installed version's `keep` paths as well as the new release's. A carried path inside a folder the new release still names lands in place; one inside a folder the new release no longer names (a renamed folder) lands in the package's saved-data folder under `carried-over/` with its old path. A release that drops a path from `keep`, because it moved those settings elsewhere, reads the old file from either place on its first run and moves the values itself. Every later release sets `upgradesFrom` to at least that release's version, so it is never installed over a version whose file wasn't moved yet.
+- `upgradesFrom` is the oldest installed version this release may be installed over (absent: any). When the installed version is older, Install is disabled with the reason ("install 3.2.0 first"), and the newest playable set includes that release.
 - **Saved data outside the install folders** lives in the package's own saved-data folder: one folder per package, named by its `id`, under the saved-data root where the manager keeps settings and records (where that root is follows the manager's storage). The installer never replaces it; it copies the whole folder at the swap, so an automatic rollback can restore it. A release doesn't list it.
 - `dataFormat` is a whole number the package raises in every release that changes the format of its saved data in `keep` or its saved-data folder (decision 9). Going back by hand is allowed only when the version gone back to has the same `dataFormat` as the installed one, so a skipped release is covered too: installing C straight from A, when B changed the format, leaves C with a higher number than A.
 
 ### Ownership
 
-The installer keeps an inventory of what each installed package owns: its folders, its ZIPs, its saved-data folder, its `needsBase` and its `dataFormat`. It never takes a release's word for it alone.
+The installer keeps an inventory of what each installed package owns: its folders, its ZIPs, its `keep` paths, its saved-data folder, its `needsBase` and its `dataFormat`. It never takes a release's word for it alone.
 
 - Every `server` and `client` entry is one plain name (no `/`, no `..`). Archive entries and `keep` paths must lie inside the named folders. Paths are checked after resolving links, so a link can't lead outside.
 - A release that names a folder or ZIP another package owns is refused, and so is one that names a destination which already exists but is in no inventory (for example a hand-installed mod with the same name).
 - When a new release no longer names a folder or ZIP the old one owned, the swap removes it, and the recovery record covers that removal too.
-- **Adopting a hand install.** A package installed before the installer existed (3.0.0 is installed by hand) has no inventory. The first time the admin tool sees it, it proposes one: from the `release.json` of the release matching the installed version, used only if that release passes the trust checks below; otherwise from the folders and ZIPs found under the package's names, with its `dataFormat` unknown. A game's `needsBase` comes from the manager's line for it in the last launch's log (below), so it is known either way. The admin confirms it before any install of that package; nothing is replaced until then. An unknown `dataFormat` never matches, so **Previous version** back to that hand install stays disabled.
+- **Adopting a hand install.** A package installed before the installer existed (3.0.0 is installed by hand) has no inventory. The first time the admin tool sees it, it proposes one: from the `release.json` of the release matching the installed version, used only if that release passes the trust checks below; otherwise from the folders and ZIPs found under the package's names, with its `keep` paths entered by the admin (the admin tool shows the files found in those folders) and its `dataFormat` unknown. A game's `needsBase` comes from the manager's line for it in the last launch's log (below), so it is known either way. The admin confirms it before any install of that package; nothing is replaced until then. An unknown `dataFormat` never matches, so **Previous version** back to that hand install stays disabled.
 
 ### Which releases are offered
 
@@ -107,7 +110,7 @@ The admin tool holds a list of repos to watch (the base and each installed game)
 
 Every newer release that passes is listed, newest first, marked with whether it fits what is installed (decision 8). Skipping versions is fine; each release is complete. While the base is 0.x, games pin an exact base version, so the newest base and the newest game don't always match: with base 0.3 installed, a newest game needing 0.4 and a newest base of 0.5, the admin tool points out the newest playable set ("install base 0.4, then the game"). Installs stay one at a time (decision 5); because the server has no playable game between the two, the second install's restart can be "now".
 
-Next to each release the admin tool shows its notes and, for a game, whether the server's base meets `needsBase`. When it doesn't, Install is disabled with the reason ("needs base 0.4.0, the server has 0.3.0; install that first"). Before a base install, the admin tool lists the installed games that the new base would leave out, using their `needsBase`.
+Next to each release the admin tool shows its notes, whether the installed version meets its `upgradesFrom`, and, for a game, whether the server's base meets `needsBase`. When it doesn't, Install is disabled with the reason ("needs base 0.4.0, the server has 0.3.0; install that first"). Before a base install, the admin tool lists the installed games that the new base would leave out, using their `needsBase`.
 
 ### Installing
 
@@ -200,7 +203,7 @@ Tests with fixture releases and a fake server folder, no network:
 - **Listing.** A game that doesn't fit the installed base is listed but can't be staged; a base install lists the games it would leave out; with a 0.x base the newest playable set is pointed out (fixture: base 0.3 installed, a game needing 0.4, newest base 0.5).
 - **Ownership.** A release is refused when it names a path that isn't one plain name, another package's folder or ZIP, an existing destination in no inventory, an archive entry outside its folders, a `keep` path outside them, or a link leading outside. A hand install can't be updated until its inventory is confirmed; an adopted `release.json` that fails the trust checks isn't used; an adopted install with unknown `dataFormat` can't be gone back to by hand.
 - **Stage.** A stage whose files don't match its list (power loss while waiting for the restart) is discarded, never swapped in.
-- **Settings moving out.** A release that drops `config.json` from `keep` after moving settings elsewhere: starting from a non-default setting, the value is the same after the install, and the release after it no longer receives the old file.
+- **Settings moving out.** Starting from a non-default setting in `config.json`: A keeps it, B moves it elsewhere and drops it from `keep`, C has `upgradesFrom` B. A → B → C keeps the value, and C no longer receives the old file; A → C is refused with "install B first". The same holds when B also renames its plugin folder (B reads the file from `carried-over/`), and when A is an adopted hand install whose `keep` paths the admin confirmed.
 - **Adoption.** An adopted game's `needsBase` comes from its line in the last launch's log, and a base install warns about it like any other game.
 - **Swap.** A successful swap keeps every `keep` path and the saved-data folder, removes files and whole folders the new release dropped, and makes the swap snapshot the previous-version copy.
 - **Crashes.** Killing the supervisor after each step, including while the swap snapshot is built, at the finish, and during a **Previous version**, and starting again always ends on one whole version, the old or the new, with the previous-version copy intact.
