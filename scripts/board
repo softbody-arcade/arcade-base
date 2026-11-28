@@ -391,7 +391,7 @@ rollover_apply() {
       echo "#$number would move to $target"
     else
       load_issue_version "$number"
-      [[ $issue_state == OPEN && $issue_ms_title == "$source" ]] || continue
+      [[ $issue_state == OPEN && $issue_ms_title == "$source" && $issue_ms_state == closed ]] || continue
       issue edit "$number" --milestone "$target" >/dev/null
       echo "#$number moved to $target"
     fi
