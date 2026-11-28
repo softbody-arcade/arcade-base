@@ -18,6 +18,7 @@ set -euo pipefail
 [[ -v ISSUES ]] || ISSUES='{}'
 [[ -v MS_ISSUES ]] || MS_ISSUES='{}'
 line=${*//$'\n'/ }
+record_state() { printf '%s\n' "$line" >> "$LOG.state"; }
 printf '%s\n' "$line" >> "$LOG"
 printf '%s\n' "$line" >> "$LOG.all"
 api_response() {
@@ -144,23 +145,25 @@ case "$*" in
     ;;
   'api repos/'*'/issues/'*)
     endpoint=${2#repos/}; repo_key=${endpoint%/issues/*}; id=${2##*/}
-    edited=$(sed -n "s/^issue edit $id --milestone \([^ ]*\).*/\1/p" "$LOG.all" | tail -n 1)
+    touch "$LOG.state"
+    edited=$(sed -n "s|^issue edit $id --milestone \([^ ]*\) --repo $repo_key\$|\1|p; s|^issue edit $id --remove-milestone --repo $repo_key\$|__none__|p" "$LOG.state" | tail -n 1)
     milestones=${MILESTONES:-'{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"open"}]}'}
     jq -n --arg id "$id" --arg repo "$repo_key" --arg state "${ISSUE_STATE:-${STATE:-OPEN}}" \
       --arg title "${MS_TITLE-1.0.0}" --arg msstate "${MS_STATE-OPEN}" --arg none "${MS_NONE:-}" \
       --arg edited "$edited" --argjson issues "$ISSUES" --argjson milestones "$milestones" '
       ({state:($state|ascii_downcase), milestone:(if $none == "1" then null else {title:$title,state:($msstate|ascii_downcase)} end)}
        + ($issues[($repo + "#" + $id)] // {})
-       | if $edited != "" then .milestone = ([$milestones[$repo][]? | select(.title == $edited)][0] // {title:$edited,state:"open"}) else . end)
+       | if $edited == "__none__" then .milestone = null elif $edited != "" then .milestone = ([$milestones[$repo][]? | select(.title == $edited)][0] // {title:$edited,state:"open"}) else . end)
       + {id:123} + (if $id == "33" then {pull_request:{url:"https://example.com/pr"}} else {} end)' | api_response "${@:3}"
     ;;
   'pr view '*--json\ body*) echo "${BODY:-}" ;;
   'issue edit '*--milestone*)
-    if [[ -n ${EDIT_FAIL:-} && $2 == "$EDIT_FAIL" ]]; then exit 7; fi
+    if [[ -n ${EDIT_FAIL:-} && $3 == "$EDIT_FAIL" ]]; then exit 7; fi
     if [[ $* == *'--milestone 9.9.9'* ]]; then echo 'milestone not found' >&2; exit 7; fi
-    echo '{}' ;;
+    record_state; echo '{}' ;;
   'api repos/'*) echo 123 ;;
-  'api -X '*|'issue edit '*|'label create '*|'issue close '*|'pr edit '*) echo '{}' ;;
+  'issue edit '*) record_state; echo '{}' ;;
+  'api -X '*|'label create '*|'issue close '*|'pr edit '*) echo '{}' ;;
   'issue create '*) echo "https://github.com/softbody-arcade/arcade-base/issues/${NEW_ISSUE:-1}" ;;
   'project item-edit '*--value\ Done)
     if [[ ${MOVE_FAIL:-} ]]; then echo 'move failed' >&2; exit 7; fi
@@ -203,7 +206,21 @@ ordered() {
   [[ $a -lt $b ]] || exit 1
 }
 wrote_line() { grep -Eq -- "$1" "$LOG" || exit 1; }
-fresh() { : > "$LOG"; : > "$LOG.all"; }
+fresh() { : > "$LOG"; : > "$LOG.all"; : > "$LOG.state"; }
+# Stub self-checks: failure injection must fire, a failed edit must not change the modelled milestone,
+# a removed milestone must read back as none, and one repo's edit must not touch another repo's issue.
+fresh
+rc=0; EDIT_FAIL=5 gh issue edit 5 --milestone 1.0.0 --repo softbody-arcade/arcade-base >/dev/null 2>&1 || rc=$?
+[[ $rc == 7 ]] || { echo 'Stub: EDIT_FAIL did not fire' >&2; exit 1; }
+[[ -z $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq '.milestone.title | select(. == "9.9.9")') ]]
+rc=0; gh issue edit 5 --milestone 9.9.9 --repo softbody-arcade/arcade-base >/dev/null 2>&1 || rc=$?
+[[ $rc == 7 ]] || { echo 'Stub: 9.9.9 edit did not fail' >&2; exit 1; }
+[[ $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq .milestone.title) == 1.0.0 ]] || { echo 'Stub: a failed edit changed the milestone' >&2; exit 1; }
+gh issue edit 5 --milestone 2.0.0 --repo softbody-arcade/other >/dev/null
+[[ $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq .milestone.title) == 1.0.0 ]] || { echo 'Stub: another repo edit leaked' >&2; exit 1; }
+gh issue edit 5 --remove-milestone --repo softbody-arcade/arcade-base >/dev/null
+[[ $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq '.milestone') == null ]] || { echo 'Stub: remove-milestone not modelled' >&2; exit 1; }
+fresh
 guard() {
   expect 1 "$@"
   [[ $(cat "$tmp/out") == "$1" ]]

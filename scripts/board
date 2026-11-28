@@ -138,7 +138,7 @@ load() {
 edit_field() {
   gh project item-edit "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/$n" --field "$1" --value "$2" >/dev/null
 }
-valid_version() { [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
+valid_version() { local LC_ALL=C; [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
 version_greater() {
   local a b i LC_ALL=C
   local -a left right
@@ -154,8 +154,8 @@ version_greater() {
   return 1
 }
 next_minor() {
-  local major minor patch digit result= carry=1 i
-  IFS=. read -r major minor patch <<< "$1"
+  local major minor digit result= carry=1 i
+  IFS=. read -r major minor _ <<< "$1"
   for ((i=${#minor}-1; i>=0; i--)); do
     digit=${minor:i:1}
     if [[ $carry == 1 ]]; then
