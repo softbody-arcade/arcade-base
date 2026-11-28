@@ -728,6 +728,25 @@ absent 'issue create'
 absent 'project item-'
 absent 'setIssueFieldValue'
 wrote "issue comment 1 --body $deferred_report"
+valid_check='{"state":"open","milestone":{"title":"1.0.0","state":"open"}}'
+fresh
+MS_NONE=1 MILESTONES=$closed recovered_check Backlog "$valid_check" expect 0 ''
+absent 'issue edit'
+absent '/milestones'
+wrote '/issues/22 --field Status --value Playtest'
+fresh
+FIELD=- recovered_check Backlog "$valid_check" expect 0 ''
+wrote '-f issue=NODE-22 -f field=FIELD -f option=OPTION'
+ordered 'setIssueFieldValue' '/issues/22 --field Status --value Playtest'
+fresh
+EXISTING_COMMENT="$deferred_report"$'\n'"$(<"$tmp/note")" recovered_check Playtest "$valid_check" expect 0 ''
+absent 'issue edit'
+absent 'project item-edit'
+absent 'pr comment'
+absent 'issue comment'
+fresh
+STATE=CLOSED MS_NONE=1 expect 0 '' result 1 fail
+wrote 'pr edit 42'
 EXISTING_COMMENT=$'Playtest fail\n' EXISTING=22 TYPE='In-game check' expect 0 '' result 1 fail
 ! wrote 'issue create' || exit 1
 grep -Fxq -- 'project item-add 9 --owner softbody-arcade --url https://github.com/softbody-arcade/arcade-base/issues/22' "$LOG" || exit 1
