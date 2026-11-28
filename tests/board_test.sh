@@ -536,6 +536,7 @@ MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 0 '' milestone 1 1.2.0
 wrote 'api -X POST repos/softbody-arcade/arcade-base/milestones'
 wrote 'issue edit 1 --milestone 1.2.0'
 ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue edit 1 --milestone'
+fresh
 MILESTONES='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.2.0","state":"closed"}]}' guard 'Milestone 1.2.0 is already released' milestone 1 1.2.0
 expect 0 '' milestone 1 1.0.0
 absent 'api -X POST'
@@ -903,6 +904,7 @@ MOVE_FAIL=1 expect 2 'move failed' release
     "softbody-arcade/other":[{"number":1,"title":"1.0.0","state":"closed"},{"number":4,"title":"1.1.0","state":"open"}]}'
   export MS_ISSUES='{"softbody-arcade/arcade-base#1":[[{"number":7},{"number":33,"pull_request":{}}],[{"number":8},{"number":9},{"number":10},{"number":11},{"number":15}]],
     "softbody-arcade/arcade-base#6":[[{"number":13}]],"softbody-arcade/arcade-base#7":[[{"number":14}]],
+    "softbody-arcade/arcade-base#4":[[{"number":20}]],
     "softbody-arcade/other#1":[[{"number":7},{"number":8},{"number":9}]]}'
   export ISSUES='{"softbody-arcade/arcade-base#10":{"state":"closed"},
     "softbody-arcade/arcade-base#11":{"milestone":{"title":"1.2.0","state":"open"}},
@@ -917,9 +919,12 @@ MOVE_FAIL=1 expect 2 'move failed' release
   absent 'api -X POST'
   absent "repos/$OTHER_REPO/"
   absent 'issues?milestone=6&'
+  absent 'issue edit 20'
   ordered 'issues?milestone=7&state=open&per_page=100' 'issue edit 7'
   ordered 'archiveProjectV2Item' 'issue edit 7'
   ordered 'issue edit 7' "api repos/$repo/issues/8"
+  fresh
+  RELEASE_TAG= expect 0 '#7 moved to 1.1.0' release
   fresh
   MS_LIST_FAIL=1 expect 2 '' release
   nowrites
