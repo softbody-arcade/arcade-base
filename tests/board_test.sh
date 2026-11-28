@@ -720,7 +720,7 @@ for lane in Playtest Inbox Backlog; do
     else
       ordered 'issue edit 22 --milestone' '/issues/22 --field Status --value Playtest'
     fi
-    if [[ $lane == Backlog ]]; then absent 'setIssueFieldValue'; fi
+    if [[ $lane == Backlog || $lane == Inbox ]]; then absent 'setIssueFieldValue'; fi
   done
 done
 fresh
@@ -748,10 +748,16 @@ MS_NONE=1 MILESTONES=$closed recovered_check Backlog "$valid_check" expect 0 ''
 absent 'issue edit'
 absent '/milestones'
 wrote '/issues/22 --field Status --value Playtest'
+for lane in Inbox Backlog; do
+  fresh
+  FIELD=- recovered_check "$lane" "$valid_check" expect 0 ''
+  wrote '-f issue=NODE-22 -f field=FIELD -f option=OPTION'
+  ordered 'setIssueFieldValue' '/issues/22 --field Status --value Playtest'
+done
 fresh
-FIELD=- recovered_check Backlog "$valid_check" expect 0 ''
-wrote '-f issue=NODE-22 -f field=FIELD -f option=OPTION'
-ordered 'setIssueFieldValue' '/issues/22 --field Status --value Playtest'
+FIELD=Urgent recovered_check Inbox "$valid_check" expect 0 ''
+absent 'setIssueFieldValue'
+wrote '/issues/22 --field Status --value Playtest'
 fresh
 EXISTING_COMMENT="$deferred_report"$'\n'"$(<"$tmp/note")" recovered_check Playtest "$valid_check" expect 0 ''
 absent 'issue edit'
