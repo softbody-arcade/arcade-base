@@ -166,6 +166,7 @@ Hooks, Make targets and scripts run with the credentials of whoever runs them, a
 - **CI** runs on every PR and on every push to `develop` and `main`. Every CI job a repo runs on pull requests is a required check in its `develop-checks` and `main-checks` rulesets, by its exact job name, and no required check names a job that doesn't run. Adding or renaming a job changes both rulesets in the same step.
 - **Playtests.**
   - Ask the maintainer for a playtest (label the PR `needs-playtest`) only when an open question depends on what BeamNG or BeamMP actually does, or on what the player sees, hears or feels. Use an engine probe or logs first when they can answer it.
+  - When an extension can drive a check, run it with one instead of writing manual steps. A temporary extension drives the game through the mod's own events, such as the panel's, and logs a pass or fail line for each check. The maintainer starts it with one console line, and the agent reads the results from the logs. The maintainer then does only what needs a person: starting the game and joining, a second client, and judging what the player sees, hears or feels.
   - For each manual check, give the shortest setup and action, the observable pass condition, and the uncertainty it resolves.
   - Ask for a second player only when observing a second client is essential.
   - A deferred check becomes an `In-game check` issue in Playtest, filed by `board result <n> defer --checks-file F`.
