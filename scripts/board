@@ -7,7 +7,7 @@ fi
 shopt -s inherit_errexit
 usage() {
   echo 'Usage: board list [--all] [lane] | waiting [--all] | show N | new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] [--milestone x.y.z] | triage N TYPE PRIORITY [EFFORT] [--milestone x.y.z] | effort N High|Medium|Low | priority N Urgent|High|Medium|Low | start N design|build | move N LANE [--staged SHA] | result N pass|fail|defer [--checks-file F] | release [vX.Y.Z] [--dry-run] | check | parent N PARENT | unparent N | milestone N x.y.z|none | block|unblock N --by M | decide N --file F | labels'
-  echo 'Quote multiword titles. Triage moves open Inbox cards to Backlog and updates fields in place on other cards except Done. Omitted effort keeps its value or defaults to Medium.'
+  echo 'Quote multiword titles. Triage moves Inbox cards to Backlog and updates fields in place in other lanes except Done. Omitted effort keeps its value or defaults to Medium.'
   echo 'Triage keeps an open version or chooses the earliest open version. New issues with a priority also default to the earliest open version. Set --milestone x.y.z to choose one explicitly.'
   echo 'Start work from Next with start. Move from Design to Build after plan approval or from Review or Playtest to Build for rework. To rework merged work in Accepted, reopen the issue: the board returns it to Inbox for triage.'
   echo 'Stage or re-stage a work card with move N playtest --staged SHA using the full local commit SHA of its linked open PR.'
@@ -605,7 +605,7 @@ LABELS
       issue edit "$n" --type "$k" >/dev/null
       set_select Priority "$2"
       set_select Effort "$selected"
-      if [[ $lane == Inbox && $issue_state == OPEN ]]; then edit_field Status Backlog; fi
+      if [[ $lane == Inbox ]]; then edit_field Status Backlog; fi
       ;;
      start)
       [[ $# == 1 && $1 =~ ^(design|build)$ ]] || bad 'Expected design or build'
@@ -633,8 +633,8 @@ LABELS
         [[ $field != - ]] || refuse 'Set type and priority first'
         if [[ $size == - ]]; then set_select Effort Medium; fi
       else
-        [[ $dest == Inbox ]] || classified
         [[ $lane != Inbox || $dest == Inbox ]] || refuse 'Use triage to leave Inbox'
+        [[ $dest == Inbox ]] || classified
         [[ $lane != Backlog || $dest =~ ^(Inbox|Backlog|Next)$ ]] || refuse 'Move ready work to Next first'
         [[ $lane != Next || $dest =~ ^(Inbox|Backlog|Next)$ ]] || refuse 'Use start to leave Next for active work'
       fi

@@ -356,7 +356,11 @@ earliest_version 0.9.0 0.10.0 0.9.0
 earliest_version 1.10.0 1.20.0 1.10.0
 earliest_version 1.0.0 99999999999999999999.0.0 1.0.0
 earliest_version 1.3.0 "\$(touch \"$tmp/pwned\")" Later 1.3.0
+earliest_version 1.3.0 0.9 1.3.0
+earliest_version 2.0.0 18446744073709551617.0.0 2.0.0
 [[ ! -e $tmp/pwned ]]
+fresh
+LANE=Inbox MS_TITLE=Later MILESTONES=$(open_versions Later 1.3.0) expect 0 'Version: 1.3.0 (defaulted)' triage 1 task High
 fresh
 versions=$(open_versions 1.3.0 1.4.0)
 MS_TITLE=1.4.0 MILESTONES=$versions expect 0 'Version: 1.4.0 (kept)' triage 1 task High
@@ -384,8 +388,11 @@ for source in Accepted Inbox; do
   wrote '-f field=SIZEFIELD -f option=SIZEOPTION'
   absent 'issue edit 1 --milestone'
   absent 'api -X POST'
-  absent 'project item-edit'
+  if [[ $source == Inbox ]]; then wrote '--field Status --value Backlog'; else absent 'project item-edit'; fi
 done
+expect 2 'Unexpected --body-file' triage 1 task High --body-file "$READY"
+nowrites
+LANE=Inbox MS_STATE=CLOSED guard 'Use triage to leave Inbox' move 1 backlog
 LANE=Done MS_NONE=1 guard 'Cannot triage a Done card' triage 1 task High --milestone 1.9.0
 for first in body milestone; do
   if [[ $first == body ]]; then opts=(--body-file "$READY" --milestone 1.3.0)
@@ -398,13 +405,14 @@ done
 for option in --milestone --body-file; do
   val=1.3.0
   if [[ $option == --body-file ]]; then val=$READY; fi
-  expect 2 '' new task T "$option" "$val" "$option" "$val"
+  if [[ $option == --body-file ]]; then missing='Expected --body-file F'; else missing='Expected --milestone x.y.z'; fi
+  expect 2 "Duplicate $option" new task T "$option" "$val" "$option" "$val"
   nowrites
-  expect 2 '' new task T "$option"
+  expect 2 "$missing" new task T "$option"
   nowrites
-  expect 2 '' new task High "$option" "$val" T
+  expect 2 'Unexpected argument: T' new task High "$option" "$val" T
   nowrites
-  expect 2 '' new task "$option"
+  expect 2 "$missing" new task "$option"
   nowrites
 done
 expect 2 'Invalid version: 01.0.0' new task T --milestone 01.0.0
