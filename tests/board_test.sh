@@ -75,7 +75,6 @@ case "$*" in
   'api repos/'*'/releases/tags/'*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   'api graphql '*projectV2*)
     status=$LANE
-    if [[ -z ${NEW_ISSUE:-} ]] && grep -q 'issue create --title Deferred' "$LOG"; then status=Inbox; fi
     if [[ -n ${DELAY_INBOX:-} ]]; then
       status=-
       if [[ -f $LOG.slept ]]; then status=Inbox; fi
@@ -589,7 +588,7 @@ wrote "pr comment 42 --body Staged for playtest (#1): $HEAD_SHA"
 MERGED_PRS=$PRS PRS= guard 'Requires one linked open PR in this repository' move 1 playtest --staged "$HEAD_SHA"
 recovery='Use board move 1 build for rework, or board move 1 playtest --staged <full sha> after staging the current linked PR head.'
 STAGED="$HEAD_SHA,other" LANE=Playtest guard "PR head differs from staged SHA. $recovery" result 1 pass
-STAGED="other,$HEAD_SHA" MERGED_PRS=${PRS%/*}/41 LANE=Playtest expect 0 '' result 1 defer --checks-file "$tmp/note"
+NEW_ISSUE=22 STAGED="other,$HEAD_SHA" MERGED_PRS=${PRS%/*}/41 LANE=Playtest expect 0 '' result 1 defer --checks-file "$tmp/note"
 wrote "Build: $HEAD_SHA ($PRS), work card #1"
 STAGED=other LANE=Playtest guard "PR head differs from staged SHA. $recovery" result 1 pass
 STAGED= LANE=Playtest guard "No staged comment from me. $recovery" result 1 pass
@@ -644,8 +643,13 @@ done
 TYPE='In-game check' expect 0 '' move 1 playtest
 wrote '--field Status --value Playtest'
 export LANE=Playtest
-expect 0 '' result 1 pass
+fresh
+MS_NONE=1 expect 0 '' result 1 pass
 wrote "pr comment 42 --body Playtest pass for #1 at $HEAD_SHA"
+failed_version='Set a valid open version before a failed playtest: board milestone 1 x.y.z'
+MS_NONE=1 guard "$failed_version" result 1 fail
+MS_STATE=CLOSED guard "$failed_version" result 1 fail
+MS_TITLE=Later guard "$failed_version" result 1 fail
 expect 0 '' result 1 fail
 wrote 'pr edit 42'
 wrote '--field Status --value Build'
@@ -655,15 +659,75 @@ printf 'High: proper line\nmissing priority\n' > "$tmp/invalid"
 expect 2 'Expected priority-prefixed check' result 1 defer --checks-file "$tmp/invalid"
 ! wrote 'issue create' || exit 1
 expect 2 'Defer requires --checks-file F' result 1 defer
+fresh
 EXISTING=22 expect 0 '' result 1 defer --checks-file "$tmp/note"
 wrote '-f issue=NODE-22 -f field=SIZEFIELD -f option=SIZEOPTION'
 wrote 'select(.name=="Medium")'
 ! wrote 'issue create' || exit 1
-expect 0 '' result 1 defer --checks-file "$tmp/note"
+fresh
+NEW_ISSUE=22 MILESTONES=$(open_versions 0.9.0 1.0.0) expect 0 'Version: 1.0.0 (kept)' result 1 defer --checks-file "$tmp/note"
+wrote_line 'issue create --title Deferred.*--milestone 1[.]0[.]0( |$)'
 wrote '--type In-game check'
-wrote '-f issue=NODE-1 -f field=FIELD -f option=OPTION'
+wrote '-f issue=NODE-22 -f field=FIELD -f option=OPTION'
 wrote '- [ ] High: Keep it.'
 wrote 'select(.name=="High")'
+deferred_report="Playtest defer for #1 at $HEAD_SHA. Deferred to #22"
+wrote "pr comment 42 --body $deferred_report"
+wrote "issue comment 1 --body $deferred_report"
+fresh
+NEW_ISSUE=22 MS_NONE=1 MILESTONES=$versions expect 0 'Version: 1.3.0 (defaulted)' result 1 defer --checks-file "$tmp/note"
+wrote_line 'issue create --title Deferred.*--milestone 1[.]3[.]0( |$)'
+fresh
+NEW_ISSUE=22 MS_TITLE=1.4.0 expect 0 '' result 1 defer --checks-file "$tmp/note"
+ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue create --title Deferred'
+wrote_line 'issue create --title Deferred.*--milestone 1[.]4[.]0( |$)'
+no_version='No open version milestone: pass --milestone x.y.z or run board milestone 1 x.y.z'
+NEW_ISSUE=22 MS_NONE=1 MILESTONES=$closed guard "$no_version" result 1 defer --checks-file "$tmp/note"
+absent 'issue create'
+
+recovered_check() {
+  local lane=$1 record=$2
+  shift 2
+  CARD_COUNT=22 LANES="{\"1\":\"Playtest\",\"22\":\"$lane\"}" \
+    ISSUES="{\"softbody-arcade/arcade-base#22\":$record}" EXISTING=22 "$@" result 1 defer --checks-file "$tmp/note"
+}
+missing='{"state":"open","milestone":null}'
+recovery_versions=$(open_versions 0.8.0 1.0.0)
+for lane in Playtest Inbox Backlog; do
+  for ms in null '{"title":"0.9.0","state":"closed"}' '{"title":"Later","state":"open"}'; do
+    fresh
+    MILESTONES=$recovery_versions recovered_check "$lane" "{\"state\":\"open\",\"milestone\":$ms}" expect 0 ''
+    ordered 'issue edit 22 --milestone 1.0.0' "pr comment 42 --body $deferred_report"
+    ordered 'issue edit 22 --milestone 1.0.0' "issue comment 1 --body $deferred_report"
+    absent 'issue edit 1 --milestone'
+    absent 'issue create'
+    if [[ $lane == Playtest ]]; then
+      absent 'project item-edit'
+    else
+      ordered 'issue edit 22 --milestone' '/issues/22 --field Status --value Playtest'
+    fi
+    if [[ $lane == Backlog ]]; then absent 'setIssueFieldValue'; fi
+  done
+done
+fresh
+MS_TITLE=1.4.0 MS_LIST_FAIL=1 recovered_check Playtest '{"state":"open","milestone":{"title":"1.3.0","state":"open"}}' expect 0 ''
+absent 'issue edit'
+absent 'project item-edit'
+wrote "issue comment 1 --body $deferred_report"
+fresh
+MS_NONE=1 MILESTONES=$closed recovered_check Backlog "$missing" guard "$no_version"
+EDIT_FAIL=22 recovered_check Backlog "$missing" expect 2 ''
+absent 'pr comment'
+absent 'issue comment'
+absent 'project item-edit'
+fresh
+MS_NONE=1 MILESTONES=$closed recovered_check Backlog '{"state":"closed","milestone":null}' expect 0 ''
+absent '/milestones'
+absent 'issue edit'
+absent 'issue create'
+absent 'project item-'
+absent 'setIssueFieldValue'
+wrote "issue comment 1 --body $deferred_report"
 EXISTING_COMMENT=$'Playtest fail\n' EXISTING=22 TYPE='In-game check' expect 0 '' result 1 fail
 ! wrote 'issue create' || exit 1
 grep -Fxq -- 'project item-add 9 --owner softbody-arcade --url https://github.com/softbody-arcade/arcade-base/issues/22' "$LOG" || exit 1
@@ -678,11 +742,24 @@ CREATOR=peer EXISTING=22 COMMENT_AUTHOR=peer EXISTING_COMMENT=$'Playtest fail\n'
 wrote 'issue create --title Failed check:'
 wrote 'issue comment 1 --body Playtest fail'
 for result in pass fail; do
-  TYPE='In-game check' expect 0 '' result 1 "$result"
+  MS_NONE=1 TYPE='In-game check' expect 0 '' result 1 "$result"
   wrote "issue close 1 --repo"
   wrote "issue comment 1 --body Playtest $result"
-  if [[ $result == fail ]]; then wrote 'issue create --title Failed check:'; fi
+  if [[ $result == fail ]]; then
+    wrote 'issue create --title Failed check:'
+    absent '--milestone'
+  fi
 done
+MS_TITLE=1.4.0 NEW_ISSUE=22 TYPE='In-game check' expect 0 '' result 1 fail
+wrote_line 'issue create --title Failed check:.*--type Bug .*--milestone 1[.]4[.]0( |$)'
+wrote 'project item-add 9 --owner softbody-arcade --url https://github.com/softbody-arcade/arcade-base/issues/22'
+absent 'project item-edit'
+MS_STATE=CLOSED TYPE='In-game check' expect 0 '' result 1 fail
+wrote 'issue create --title Failed check:'
+absent '--milestone'
+MS_TITLE=Later TYPE='In-game check' expect 0 '' result 1 fail
+wrote 'issue create --title Failed check:'
+absent '--milestone'
 TYPE='In-game check' guard 'Check already deferred' result 1 defer
 guard '#33 is a pull request' show 33
 guard '#33 is a pull request' decide 33 --file "$tmp/note"

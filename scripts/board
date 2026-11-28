@@ -196,6 +196,7 @@ load_issue_version() {
   issue_ms_title=$(jq -r '.milestone.title // ""' <<< "$record")
   issue_ms_state=$(jq -r '.milestone.state // ""' <<< "$record")
 }
+open_issue_version() { [[ $issue_ms_state == open ]] && valid_version "$issue_ms_title"; }
 reset_issue_version() {
   issue_state=OPEN issue_ms_title= issue_ms_state=
 }
@@ -205,7 +206,7 @@ resolve_version() {
   if [[ -n $explicit ]]; then
     valid_version "$explicit" || bad "Invalid version: $explicit"
     chosen=$explicit chosen_how=given
-  elif [[ $issue_ms_state == open ]] && valid_version "$issue_ms_title"; then
+  elif open_issue_version; then
     chosen=$issue_ms_title chosen_how=kept
     return
   fi
@@ -674,8 +675,14 @@ LABELS
         if [[ $outcome == fail ]]; then
           marker="Failed in-game check #$original"
           existing=$(find_created "$marker" Bug)
-          if [[ -z $existing ]]; then create Bug '' '' "Failed check: $caption" Inbox --body "$marker"$'\n'"$notes"
-          else gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/${existing%%$'\n'*}" >/dev/null; fi
+          if [[ -z $existing ]]; then
+            load_issue_version "$original"
+            version_args=()
+            if open_issue_version; then version_args=(--milestone "$issue_ms_title"); fi
+            create Bug '' '' "Failed check: $caption" Inbox --body "$marker"$'\n'"$notes" "${version_args[@]}"
+          else
+            gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/${existing%%$'\n'*}" >/dev/null
+          fi
         fi
         comment_once issue "$original" "Playtest $outcome"$'\n'"$notes"
         issue close "$original"
@@ -699,21 +706,39 @@ LABELS
             checklist+="- [ ] $line"$'\n'
           done <<< "$notes"
           build="Build: $head ($open_pr), work card #$original"
-          existing=$(find_created "$build" 'In-game check')
-          if [[ -n $existing ]]; then
-            n=${existing%%$'\n'*}
-            gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/$n"
-            load
-            if [[ $lane == Inbox || $lane == - ]]; then
-              set_select Priority "$p"
-              if [[ ${size:--} == - ]]; then set_select Effort Medium; fi
-              edit_field Status Playtest
+          check_number=$(find_created "$build" 'In-game check')
+          check_number=${check_number%%$'\n'*}
+          if [[ -n $check_number ]]; then
+            load_issue_version "$check_number"
+            if [[ $issue_state == OPEN ]]; then
+              if ! open_issue_version; then
+                load_issue_version "$original"
+                resolve_version
+                apply_version "$check_number"
+              fi
+              n=$check_number
+              gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/$n"
+              load
+              if [[ $lane != Playtest ]]; then
+                if [[ $lane == Inbox || $lane == - || ${field:--} == - ]]; then set_select Priority "$p"; fi
+                if [[ ${size:--} == - ]]; then set_select Effort Medium; fi
+                edit_field Status Playtest
+              fi
             fi
           else
-            create 'In-game check' "$p" Medium "Deferred checks: $caption" Playtest --body "$build"$'\n\n'"$checklist"
+            load_issue_version "$original"
+            resolve_version
+            ensure_milestone "$chosen"
+            create 'In-game check' "$p" Medium "Deferred checks: $caption" Playtest --body "$build"$'\n\n'"$checklist" --milestone "$chosen"
+            echo "Version: $chosen ($chosen_how)"
+            check_number=$n
           fi
-          report+=". Deferred to #$n"
+          report+=". Deferred to #$check_number"
         elif [[ $outcome == fail ]]; then
+          load_issue_version "$original"
+          if [[ $issue_state == OPEN ]] && ! open_issue_version; then
+            refuse "Set a valid open version before a failed playtest: board milestone $original x.y.z"
+          fi
           body=$(pr view "$pull" --json body --jq .body)
           if ! grep -Eq "^- \[[ xX]\] Playtest fail for #$original at $head([[:space:]]|$)" <<< "$body"; then
             pr edit "$pull" --body "$body"$'\n\n- [ ] '"$report ${notes//$'\n'/ }"
