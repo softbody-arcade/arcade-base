@@ -398,6 +398,11 @@ expect 2 'Unexpected --body-file' triage 1 task High --body-file "$READY"
 nowrites
 LANE=Inbox MS_STATE=CLOSED guard 'Use triage to leave Inbox' move 1 backlog
 LANE=Done MS_NONE=1 guard 'Cannot triage a Done card' triage 1 task High --milestone 1.9.0
+STATE=CLOSED LANE=Accepted MS_NONE=1 guard 'A closed issue takes no version' triage 1 task High --milestone 1.9.0
+fresh
+OWNER_TYPE=Bogus expect 0 '' milestone 1 1.2.0
+wrote 'issue edit 1 --milestone 1.2.0'
+fresh
 for first in body milestone; do
   fresh
   if [[ $first == body ]]; then opts=(--body-file "$READY" --milestone 1.3.0)
@@ -926,6 +931,10 @@ MOVE_FAIL=1 expect 2 'move failed' release
   ordered 'issue edit 7' "api repos/$repo/issues/8"
   fresh
   RELEASE_TAG= expect 0 '#7 moved to 1.1.0' release
+  fresh
+  MILESTONES='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"closed"}]}' MS_ISSUES='{}' expect 0 '' release
+  absent 'api -X POST'
+  absent 'issue edit'
   fresh
   MS_LIST_FAIL=1 expect 2 '' release
   nowrites

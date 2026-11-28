@@ -378,7 +378,7 @@ rollover_plan() {
 rollover_apply() {
   local number source target
   if [[ -n $roll_create ]]; then
-    if $dry_run; then
+    if [[ $dry_run == true ]]; then
       echo "Milestone $roll_create would be created"
     else
       ensure_milestone "$roll_create"
@@ -387,7 +387,7 @@ rollover_apply() {
   fi
   while read -r number source target; do
     [[ -n $number ]] || continue
-    if $dry_run; then
+    if [[ $dry_run == true ]]; then
       echo "#$number would move to $target"
     else
       load_issue_version "$number"
@@ -629,9 +629,9 @@ LABELS
    milestone)
     [[ $# == 1 ]] || bad 'Expected x.y.z or none'
     [[ $1 == none ]] || valid_version "$1" || bad 'Expected x.y.z or none'
-    project; load
-    load_issue_version "$n"
     if [[ $1 == none ]]; then
+      project; load
+      load_issue_version "$n"
       [[ $issue_state != OPEN || $lane == Inbox ]] || refuse 'An open issue outside Inbox needs a version'
       issue edit "$n" --remove-milestone
     else
@@ -665,6 +665,7 @@ LABELS
       k=$(kind "$1"); priority "$2"
       [[ $lane != Done ]] || refuse 'Cannot triage a Done card'
       load_issue_version "$n"
+      [[ -z $requested_version || $issue_state == OPEN ]] || refuse 'A closed issue takes no version'
       if [[ $issue_state == OPEN ]]; then
         resolve_version "$requested_version"
         apply_version "$n"
