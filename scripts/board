@@ -466,6 +466,12 @@ case $cmd in
         [[ $field != - ]] || problem "#$num missing priority"
         [[ $size != - ]] || problem "#$num missing effort"
       fi
+      if [[ $lane != Inbox ]]; then
+        if [[ $mstate == - ]]; then problem "#$num missing version"
+        elif ! valid_version "$milestone"; then problem "#$num version \"$milestone\" is not x.y.z"
+        elif [[ $mstate == CLOSED ]]; then problem "#$num version $milestone is already released"
+        fi
+      fi
       if [[ $lane == Next && $blockers != 0 ]]; then problem "#$num blocked in Next"; fi
       continue
     fi
@@ -631,6 +637,11 @@ LABELS
       [[ $# != 3 || $type != 'In-game check' ]] || bad 'Unexpected --staged'
       if [[ $type == 'In-game check' && $dest == Playtest && $lane =~ ^(Inbox|Backlog|Next)$ ]]; then
         [[ $field != - ]] || refuse 'Set type and priority first'
+        if [[ $state == OPEN ]]; then
+          load_issue_version "$n"
+          resolve_version
+          apply_version "$n"
+        fi
         if [[ $size == - ]]; then set_select Effort Medium; fi
       else
         [[ $lane != Inbox || $dest == Inbox ]] || refuse 'Use triage to leave Inbox'
