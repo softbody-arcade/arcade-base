@@ -6,8 +6,9 @@ if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) ))
 fi
 shopt -s inherit_errexit
 usage() {
-  echo 'Usage: board list [--all] [lane] | waiting [--all] | show N | new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] | triage N TYPE PRIORITY [EFFORT] | effort N High|Medium|Low | priority N Urgent|High|Medium|Low | start N design|build | move N LANE [--staged SHA] | result N pass|fail|defer [--checks-file F] | release [vX.Y.Z] [--dry-run] | check | parent N PARENT | unparent N | milestone N x.y.z|none | block|unblock N --by M | decide N --file F | labels'
-  echo 'Quote multiword titles. Triage moves Inbox cards to Backlog and updates fields in place in other lanes except Done. Omitted effort keeps its value or defaults to Medium.'
+  echo 'Usage: board list [--all] [lane] | waiting [--all] | show N | new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] [--milestone x.y.z] | triage N TYPE PRIORITY [EFFORT] [--milestone x.y.z] | effort N High|Medium|Low | priority N Urgent|High|Medium|Low | start N design|build | move N LANE [--staged SHA] | result N pass|fail|defer [--checks-file F] | release [vX.Y.Z] [--dry-run] | check | parent N PARENT | unparent N | milestone N x.y.z|none | block|unblock N --by M | decide N --file F | labels'
+  echo 'Quote multiword titles. Triage moves open Inbox cards to Backlog and updates fields in place on other cards except Done. Omitted effort keeps its value or defaults to Medium.'
+  echo 'Triage keeps an open version or chooses the earliest open version. New issues with a priority also default to the earliest open version. Set --milestone x.y.z to choose one explicitly.'
   echo 'Start work from Next with start. Move from Design to Build after plan approval or from Review or Playtest to Build for rework. To rework merged work in Accepted, reopen the issue: the board returns it to Inbox for triage.'
   echo 'Stage or re-stage a work card with move N playtest --staged SHA using the full local commit SHA of its linked open PR.'
   echo 'Move an In-game check from Inbox, Backlog or Next to Playtest after setting priority. Move it from Playtest to Backlog to defer testing.'
@@ -195,9 +196,71 @@ load_issue_version() {
   issue_ms_title=$(jq -r '.milestone.title // ""' <<< "$record")
   issue_ms_state=$(jq -r '.milestone.state // ""' <<< "$record")
 }
+reset_issue_version() {
+  issue_state=OPEN issue_ms_title= issue_ms_state=
+}
+resolve_version() {
+  local explicit=${1:-} rows ms_title ms_state
+  chosen= chosen_how=
+  if [[ -n $explicit ]]; then
+    valid_version "$explicit" || bad "Invalid version: $explicit"
+    chosen=$explicit chosen_how=given
+  elif [[ $issue_ms_state == open ]] && valid_version "$issue_ms_title"; then
+    chosen=$issue_ms_title chosen_how=kept
+    return
+  fi
+  rows=$(repo_milestones)
+  while IFS=$'\t' read -r _ ms_title ms_state; do
+    if [[ -n $explicit ]]; then
+      [[ $ms_title == "$explicit" && $ms_state != open ]] && refuse "Milestone $explicit is already released"
+      continue
+    fi
+    [[ $ms_state == open ]] && valid_version "$ms_title" || continue
+    if [[ -z $chosen ]] || version_greater "$chosen" "$ms_title"; then
+      chosen=$ms_title chosen_how=defaulted
+    fi
+  done <<< "$rows"
+  [[ -n $chosen ]] || refuse "No open version milestone: pass --milestone x.y.z${n:+ or run board milestone $n x.y.z}"
+}
+apply_version() {
+  load_issue_version "$1"
+  ensure_milestone "$chosen"
+  if [[ $issue_ms_title != "$chosen" ]]; then issue edit "$1" --milestone "$chosen" >/dev/null; fi
+  echo "Version: $chosen ($chosen_how)"
+}
+parse_ticket_options() {
+  positionals=()
+  requested_version= body_file=
+  while (($#)) && [[ $1 != --milestone && $1 != --body-file ]]; do
+    positionals+=("$1")
+    shift
+  done
+  while (($#)); do
+    case $1 in
+      --milestone)
+        [[ -z $requested_version ]] || bad 'Duplicate --milestone'
+        (($# >= 2)) || bad 'Expected --milestone x.y.z'
+        valid_version "$2" || bad "Invalid version: $2"
+        requested_version=$2
+        ;;
+      --body-file)
+        [[ $cmd == new ]] || bad 'Unexpected --body-file'
+        [[ -z $body_file ]] || bad 'Duplicate --body-file'
+        [[ $# -ge 2 && $2 != --milestone && $2 != --body-file ]] || bad 'Expected --body-file F'
+        file "$2"
+        body_file=$2
+        ;;
+      *) bad "Unexpected argument: $1" ;;
+    esac
+    shift 2
+  done
+}
 classified() {
   [[ $type != - && $field != - ]] || refuse 'Set type and priority first'
   [[ $size != - ]] || refuse 'Set effort first'
+  if [[ $state == OPEN ]]; then
+    [[ $mstate == OPEN ]] && valid_version "$milestone" || refuse "Set a valid open version first: board milestone $n x.y.z"
+  fi
 }
 set_select() {
   local ids fid opt node
@@ -438,16 +501,24 @@ LABELS
  new)
   (($# >= 2)) || bad 'Missing type or title'
   k=$(kind "$1"); shift
+  parse_ticket_options "$@"
+  set -- "${positionals[@]}"
   args=(--body '')
-  if (( $# >= 3 )) && [[ ${@: -2:1} == --body-file ]]; then
-    file "${!#}"; args=(--body-file "${!#}")
-    set -- "${@:1:$#-2}"
-  fi
+  if [[ -n $body_file ]]; then args=(--body-file "$body_file"); fi
   p= requested_size=
   if (( $# >= 2 )); then priority "$1"; p=$1; shift; fi
   if (( $# >= 2 )); then effort "$1"; requested_size=$1; shift; fi
   [[ $# == 1 && -n $1 ]] || bad 'Expected one title'
-  project; create "$k" "$p" "$requested_size" "$1" Backlog "${args[@]}"
+  project
+  chosen= n=
+  if [[ -n $p || -n $requested_version ]]; then
+    reset_issue_version
+    resolve_version "$requested_version"
+    ensure_milestone "$chosen"
+    args+=(--milestone "$chosen")
+  fi
+  create "$k" "$p" "$requested_size" "$1" Backlog "${args[@]}"
+  if [[ -n $chosen ]]; then echo "Version: $chosen ($chosen_how)"; fi
   ;;
  parent|unparent|milestone|show|effort|priority|decide|block|unblock|triage|move|start|result)
   n=${1:-}; issue_id "$n" >/dev/null; shift
@@ -518,16 +589,23 @@ LABELS
     [[ $lane != - ]] || refuse "Issue #$n has no board status"
     case $cmd in
      triage)
+      parse_ticket_options "$@"
+      set -- "${positionals[@]}"
       (($# == 2 || $# == 3)) || bad 'Expected type, priority and optional effort'
       selected=${3:-$size}
       [[ $selected != - || $# == 3 ]] || selected=Medium
       effort "$selected"
       k=$(kind "$1"); priority "$2"
       [[ $lane != Done ]] || refuse 'Cannot triage a Done card'
+      load_issue_version "$n"
+      if [[ $issue_state == OPEN ]]; then
+        resolve_version "$requested_version"
+        apply_version "$n"
+      fi
       issue edit "$n" --type "$k" >/dev/null
       set_select Priority "$2"
       set_select Effort "$selected"
-      if [[ $lane == Inbox ]]; then edit_field Status Backlog; fi
+      if [[ $lane == Inbox && $issue_state == OPEN ]]; then edit_field Status Backlog; fi
       ;;
      start)
       [[ $# == 1 && $1 =~ ^(design|build)$ ]] || bad 'Expected design or build'

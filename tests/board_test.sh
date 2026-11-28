@@ -284,7 +284,7 @@ OWNER_TYPE=User expect 0 Card list --all
 wrote 'user(login:$owner)'
 LANE=Accepted STATE=CLOSED guard 'To rework merged work, reopen #1: the board returns it to Inbox, then triage it again' move 1 build
 LANE=Accepted guard '#1 is already open: move it to Inbox with board move 1 inbox, then triage it again' move 1 build
-LANE=Accepted expect 0 '' move 1 inbox
+LANE=Accepted MS_NONE=1 expect 0 '' move 1 inbox
 wrote '--field Status --value Inbox'
 LANE=Inbox guard 'Use start from Next to enter Design or Build' move 1 build
 LANE=Review expect 0 '' move 1 build
@@ -310,13 +310,14 @@ expect 1 'did not enter Inbox' new feature High Card
 DELAY_INBOX=1 expect 0 '' new feature High Card
 diff -u - "$tmp/out" <<'URL'
 https://github.com/softbody-arcade/arcade-base/issues/1
+Version: 1.0.0 (defaulted)
 URL
 [[ -f $LOG.slept ]]
 order() { [[ $(sed -n 's/.*--field \([^ ]*\) --value .*/\1/p' "$LOG") == Status ]]; }
 order
 wrote 'issue create --title Card --type Feature'
 LANE=Inbox expect 0 '' triage 1 bug Medium
-[[ ! -s $tmp/out ]]
+[[ $(cat "$tmp/out") == 'Version: 1.0.0 (kept)' ]]
 wrote 'issue edit 1 --type Bug'
 wrote 'setIssueFieldValue'
 order
@@ -340,6 +341,109 @@ for source in Backlog Next Design Build Review Playtest Accepted; do
   wrote 'select(.name=="Medium")'
   ! wrote 'project item-edit' || exit 1
 done
+open_versions() {
+  jq -nc --args '{"softbody-arcade/arcade-base": ($ARGS.positional | to_entries | map({number:(.key+1),title:.value,state:"open"}))}' -- "$@"
+}
+earliest_version() {
+  fresh
+  local expected=$1
+  shift
+  LANE=Inbox MS_NONE=1 MILESTONES=$(open_versions "$@") expect 0 "Version: $expected (defaulted)" triage 1 task High
+  ordered "issue edit 1 --milestone $expected" 'issue edit 1 --type'
+}
+earliest_version 1.3.0 1.4.0 1.3.0
+earliest_version 0.9.0 0.10.0 0.9.0
+earliest_version 1.10.0 1.20.0 1.10.0
+earliest_version 1.0.0 99999999999999999999.0.0 1.0.0
+earliest_version 1.3.0 "\$(touch \"$tmp/pwned\")" Later 1.3.0
+[[ ! -e $tmp/pwned ]]
+fresh
+versions=$(open_versions 1.3.0 1.4.0)
+MS_TITLE=1.4.0 MILESTONES=$versions expect 0 'Version: 1.4.0 (kept)' triage 1 task High
+absent 'issue edit 1 --milestone'
+absent 'api -X POST'
+MS_TITLE=1.4.0 MILESTONES=$versions expect 0 'Version: 1.9.0 (given)' triage 1 task High Low --milestone 1.9.0
+ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue edit 1 --milestone 1.9.0'
+ordered 'issue edit 1 --milestone 1.9.0' 'issue edit 1 --type'
+closed='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.3.0","state":"closed"}]}'
+for source in Inbox Backlog; do
+  fresh
+  LANE=$source MS_TITLE=1.2.0 MS_STATE=CLOSED MILESTONES=$versions expect 0 'Version: 1.3.0 (defaulted)' triage 1 task High
+  wrote 'issue edit 1 --milestone 1.3.0'
+done
+fresh
+expect 2 'Invalid version: 01.0.0' triage 1 task High --milestone 01.0.0
+nowrites
+MILESTONES=$closed guard 'Milestone 1.3.0 is already released' triage 1 task High --milestone 1.3.0
+MS_NONE=1 MILESTONES=$closed guard 'No open version milestone: pass --milestone x.y.z or run board milestone 1 x.y.z' triage 1 task High
+for source in Accepted Inbox; do
+  STATE=CLOSED LANE=$source MS_NONE=1 MILESTONES=$closed expect 0 '' triage 1 task High Low
+  [[ ! -s $tmp/out ]]
+  wrote 'issue edit 1 --type Task'
+  wrote '-f field=FIELD -f option=OPTION'
+  wrote '-f field=SIZEFIELD -f option=SIZEOPTION'
+  absent 'issue edit 1 --milestone'
+  absent 'api -X POST'
+  absent 'project item-edit'
+done
+LANE=Done MS_NONE=1 guard 'Cannot triage a Done card' triage 1 task High --milestone 1.9.0
+for first in body milestone; do
+  if [[ $first == body ]]; then opts=(--body-file "$READY" --milestone 1.3.0)
+  else opts=(--milestone 1.3.0 --body-file "$READY"); fi
+  LANE=Inbox expect 0 'Version: 1.3.0 (given)' new task High Medium T "${opts[@]}"
+  wrote_line 'issue create.*--title T.*--milestone 1[.]3[.]0'
+  wrote "issue create --title T --type Task --body-file $READY"
+  ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue create'
+done
+for option in --milestone --body-file; do
+  val=1.3.0
+  if [[ $option == --body-file ]]; then val=$READY; fi
+  expect 2 '' new task T "$option" "$val" "$option" "$val"
+  nowrites
+  expect 2 '' new task T "$option"
+  nowrites
+  expect 2 '' new task High "$option" "$val" T
+  nowrites
+  expect 2 '' new task "$option"
+  nowrites
+done
+expect 2 'Invalid version: 01.0.0' new task T --milestone 01.0.0
+nowrites
+MILESTONES=$closed guard 'Milestone 1.3.0 is already released' new task T --milestone 1.3.0
+LANE=Inbox MILESTONES=$versions expect 0 'Version: 1.3.0 (defaulted)' new task High T
+wrote_line 'issue create.*--title T.*--milestone 1[.]3[.]0'
+MILESTONES=$closed guard 'No open version milestone: pass --milestone x.y.z' new task High T
+absent 'issue create'
+MILESTONES=$closed expect 0 '' new task T
+absent '--milestone'
+[[ $(cat "$tmp/out") == 'https://github.com/softbody-arcade/arcade-base/issues/1' ]]
+expect 0 'Version: 1.3.0 (given)' new task T --milestone 1.3.0
+wrote_line 'issue create.*--title T.*--milestone 1[.]3[.]0'
+expect 0 'triage N TYPE PRIORITY [EFFORT] [--milestone x.y.z]' --help
+expect 0 'new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] [--milestone x.y.z]' --help
+version_gate='Set a valid open version first: board milestone 1 x.y.z'
+for condition in missing released invalid; do
+  (
+    case $condition in
+      missing) export MS_NONE=1 ;;
+      released) export MS_STATE=CLOSED ;;
+      invalid) export MS_TITLE=Later ;;
+    esac
+    LANE=Backlog guard "$version_gate" move 1 next
+    LANE=Next guard "$version_gate" start 1 build
+    LANE=Build guard "$version_gate" move 1 review
+    LANE=Playtest guard "$version_gate" move 1 build
+    LANE=Playtest guard "$version_gate" move 1 playtest --staged "$(git rev-parse HEAD)"
+  )
+done
+LANE=Backlog expect 0 '' move 1 next
+wrote '--field Status --value Next'
+LANE=Next expect 0 '' start 1 build
+wrote '--add-assignee me'
+LANE=Build expect 0 '' move 1 review
+wrote '--field Status --value Review'
+STATE=CLOSED MS_NONE=1 LANE=Build expect 0 '' move 1 review
+wrote '--field Status --value Review'
 LANE=Done guard 'Cannot triage a Done card' triage 1 bug High
 LANE=Inbox expect 0 '' new task High Medium 'Low'
 wrote 'issue create --title Low --type Task'
@@ -358,6 +462,8 @@ LANE=Inbox SIZE=- expect 0 '' triage 1 task Low
 wrote 'select(.name=="Medium")'
 LANE=Inbox expect 2 'Invalid effort: Urgent' triage 1 task High Urgent
 ! wrote 'issue edit' || exit 1
+MS_NONE=1 expect 0 '' priority 1 High
+wrote 'select(.name=="High")'
 expect 0 '' priority 1 Urgent
 [[ ! -s $tmp/out ]]
 wrote 'select(.name=="Priority")'
@@ -365,6 +471,8 @@ wrote 'select(.name=="Urgent")'
 wrote '-f issue=NODE-1 -f field=FIELD -f option=OPTION'
 expect 2 'Invalid priority: Later' priority 1 Later
 ! wrote 'setIssueFieldValue' || exit 1
+MS_NONE=1 expect 0 '' effort 1 Low
+wrote 'select(.name=="Low")'
 expect 0 '' effort 1 High
 wrote 'select(.name=="Effort")'
 wrote 'select(.name=="High")'
@@ -399,11 +507,11 @@ First
 Second
 SHOW
 wrote 'subIssues,blockedBy,closedByPullRequestsReferences'
-expect 0 '' parent 1 2
+MS_NONE=1 expect 0 '' parent 1 2
 wrote 'addSubIssue'
 wrote '-f child=NODE-1 -f par=NODE-2'
 PARENT='' guard 'Issue has no parent' unparent 1
-expect 0 '' unparent 1
+MS_NONE=1 expect 0 '' unparent 1
 wrote 'removeSubIssue'
 expect 2 'Expected x.y.z or none' milestone 1 01.2.3
 nowrites
@@ -442,9 +550,9 @@ LANE=Inbox expect 0 '' milestone 1 none
 wrote 'issue edit 1 --remove-milestone'
 STATE=CLOSED expect 0 '' milestone 1 none
 wrote 'issue edit 1 --remove-milestone'
-expect 0 '' block 1 --by 2
+MS_NONE=1 expect 0 '' block 1 --by 2
 wrote 'POST repos/softbody-arcade/arcade-base/issues/1/dependencies/blocked_by -F issue_id=123'
-expect 0 '' unblock 1 --by 2
+MS_NONE=1 expect 0 '' unblock 1 --by 2
 wrote 'DELETE repos/softbody-arcade/arcade-base/issues/1/dependencies/blocked_by/123'
 expect 0 '' labels
 [[ $(grep -c '^label create ' "$LOG") == 5 ]]
@@ -454,7 +562,7 @@ wrote 'label create accessibility --repo softbody-arcade/arcade-base --force --c
 wrote 'label create needs-decision --repo softbody-arcade/arcade-base --force --color D93F0B --description Waiting on a maintainer decision'
 wrote 'label create needs-playtest --repo softbody-arcade/arcade-base --force --color 5319E7 --description PR changes something a player sees, hears or feels'
 printf 'Low: Observe.\nHigh: Keep it.\n' > "$tmp/note"
-expect 0 '' decide 1 --file "$tmp/note"
+MS_NONE=1 expect 0 '' decide 1 --file "$tmp/note"
 wrote "**Decision ($(date +%F)):**"
 export LANE=Review
 export PRS=https://github.com/softbody-arcade/arcade-base/pull/42
