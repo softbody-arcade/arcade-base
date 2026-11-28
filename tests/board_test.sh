@@ -14,7 +14,12 @@ export LOG="$tmp/log" PATH="$tmp:$PATH" LANE=Next ASSIGNED=- BLOCKERS=0
 cat > "$tmp/gh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "$LOG"
+[[ -v LANES ]] || LANES='{}'
+[[ -v ISSUES ]] || ISSUES='{}'
+[[ -v MS_ISSUES ]] || MS_ISSUES='{}'
+line=${*//$'\n'/ }
+printf '%s\n' "$line" >> "$LOG"
+printf '%s\n' "$line" >> "$LOG.all"
 api_response() {
   if [[ ${1:-} == --jq ]]; then jq -r "$2"; else cat; fi
 }
@@ -69,7 +74,7 @@ case "$*" in
   'api repos/'*'/releases/tags/'*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   'api graphql '*projectV2*)
     status=$LANE
-    if grep -q 'issue create --title Deferred' "$LOG"; then status=Inbox; fi
+    if [[ -z ${NEW_ISSUE:-} ]] && grep -q 'issue create --title Deferred' "$LOG"; then status=Inbox; fi
     if [[ -n ${DELAY_INBOX:-} ]]; then
       status=-
       if [[ -f $LOG.slept ]]; then status=Inbox; fi
@@ -77,14 +82,17 @@ case "$*" in
     jq -n --arg lane "$status" --arg priority "${FIELD-High}" --arg effort "${SIZE-Low}" \
       --arg type "${TYPE-Feature}" --arg state "${STATE:-OPEN}" --arg label "${TAGS:-}" \
       --arg assigned "$ASSIGNED" --arg prs "${PRS:-}" --arg merged "${MERGED_PRS:-}" --argjson blockers "$BLOCKERS" \
+      --arg ms_title "${MS_TITLE-1.0.0}" --arg ms_state "${MS_STATE-OPEN}" --arg ms_none "${MS_NONE:-}" \
+      --argjson lanes "$LANES" --arg new_issue "${NEW_ISSUE:-}" \
+      --arg created "$(if grep -q 'issue create --title Deferred' "$LOG.all"; then echo yes; fi)" \
       --argjson count "${CARD_COUNT:-1}" --argjson others "${OTHER_COUNT:-0}" --arg otherrepo "${OTHER_REPO:-softbody-arcade/other}" --arg owner "${OWNER_TYPE:-Organization}" '
       def nodes($values; key): {nodes: [$values | split(",")[] | select(. != "" and . != "-") | key]};
       {data: {($owner|ascii_downcase): {projectV2: {items: {nodes: [
         {content: null}, {content: {}},
-        (range(1; $count+$others+1) as $n | {
-          status: (if $lane == "-" then null else {name: $lane} end),
-          content: {repository: {nameWithOwner: (if $n > $count then $otherrepo else "softbody-arcade/arcade-base" end)},
-            number: $n, title: "Card", state: $state, milestone: {title: "v1"},
+        ((range(1; $count+$others+1), (select($created == "yes" and $new_issue != "") | $new_issue|tonumber | select(. > $count+$others))) as $n | {
+          status: ((if $created == "yes" and $new_issue == ($n|tostring) then "Inbox" else ($lanes[($n|tostring)] // $lane) end) | if . == "-" then null else {name: .} end),
+          content: {repository: {nameWithOwner: (if $n > $count and $n <= $count+$others then $otherrepo else "softbody-arcade/arcade-base" end)},
+            number: $n, title: "Card", state: $state, milestone: (if $ms_none == "1" then null else {title: $ms_title, state: $ms_state} end),
             issueType: (if $type == "-" then null else {name: $type} end),
             issueFieldValues: {nodes: [
               ({field: {name: "Priority"}, name: $priority}, {field: {name: "Effort"}, name: $effort})
@@ -107,6 +115,27 @@ case "$*" in
   'pr comment '*) echo '{}' ;;
   'api user '*) echo me ;;
   'issue view '*--json\ body*) cat "$READY" ;;
+  'api --paginate '*'/milestones?state=all&per_page=100'*)
+    [[ -z ${MS_LIST_FAIL:-} ]] || exit 7
+    endpoint=${3#repos/}; repo_key=${endpoint%%/milestones*}
+    milestones=${MILESTONES:-'{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"open"}]}'}
+    raced=$(sed -n 's/^api -X POST repos\/.*\/milestones .*title=\([^ ]*\).*/\1/p' "$LOG.all" | tail -n 1)
+    jq -n --argjson data "$milestones" --arg repo "$repo_key" --arg raced "$raced" --arg exists "${POST_EXISTS:-}" '
+      ($data[$repo] // []) + (if $exists == "1" and $raced != "" then [{number:999,title:$raced,state:"open"}] else [] end)' | api_response "${@:4}"
+    ;;
+  'api --paginate '*'/issues?milestone='*)
+    endpoint=${3#repos/}; repo_key=${endpoint%%/issues*}; query=${endpoint#*milestone=}; ms_num=${query%%&*}
+    pages=$(jq -c --arg key "$repo_key#$ms_num" '.[$key] // []' <<< "$MS_ISSUES")
+    count=$(jq 'length' <<< "$pages")
+    for ((page=1; page<=count; page++)); do
+      [[ ${LIST_FAIL:-} != "$repo_key#$ms_num:$page" ]] || exit 7
+      jq -c ".[ $((page-1)) ]" <<< "$pages" | api_response "${@:4}"
+    done
+    ;;
+  'api -X POST repos/'*'/milestones '*)
+    if [[ ${POST_EXISTS:-} == 1 ]]; then echo 'already exists (HTTP 422)' >&2; exit 1; fi
+    echo '{}'
+    ;;
   'api --paginate '*'/issues?state='*)
     jq -n --arg existing "${EXISTING:-}" --arg author "${CREATOR:-me}" --arg head "$HEAD_SHA" --arg prs "$PRS" '
       [select($existing != "") | {number: ($existing|tonumber), user:{login:$author}, author_association:"MEMBER"}
@@ -114,13 +143,25 @@ case "$*" in
           {type:{name:"In-game check"}, body:("Build: " + $head + " (" + $prs + "), work card #1")})]' | api_response "${@:4}"
     ;;
   'api repos/'*'/issues/'*)
-    jq -n --arg id "${2##*/}" '{id:123} + (if $id == "33" then {pull_request:{url:"https://example.com/pr"}} else {} end)' | api_response "${@:3}"
+    endpoint=${2#repos/}; repo_key=${endpoint%/issues/*}; id=${2##*/}
+    edited=$(sed -n "s/^issue edit $id --milestone \([^ ]*\).*/\1/p" "$LOG.all" | tail -n 1)
+    milestones=${MILESTONES:-'{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"open"}]}'}
+    jq -n --arg id "$id" --arg repo "$repo_key" --arg state "${ISSUE_STATE:-${STATE:-OPEN}}" \
+      --arg title "${MS_TITLE-1.0.0}" --arg msstate "${MS_STATE-OPEN}" --arg none "${MS_NONE:-}" \
+      --arg edited "$edited" --argjson issues "$ISSUES" --argjson milestones "$milestones" '
+      ({state:($state|ascii_downcase), milestone:(if $none == "1" then null else {title:$title,state:($msstate|ascii_downcase)} end)}
+       + ($issues[($repo + "#" + $id)] // {})
+       | if $edited != "" then .milestone = ([$milestones[$repo][]? | select(.title == $edited)][0] // {title:$edited,state:"open"}) else . end)
+      + {id:123} + (if $id == "33" then {pull_request:{url:"https://example.com/pr"}} else {} end)' | api_response "${@:3}"
     ;;
   'pr view '*--json\ body*) echo "${BODY:-}" ;;
-  'issue edit '*--milestone\ 9.9.9*) echo 'milestone not found' >&2; exit 7 ;;
+  'issue edit '*--milestone*)
+    if [[ -n ${EDIT_FAIL:-} && $2 == "$EDIT_FAIL" ]]; then exit 7; fi
+    if [[ $* == *'--milestone 9.9.9'* ]]; then echo 'milestone not found' >&2; exit 7; fi
+    echo '{}' ;;
   'api repos/'*) echo 123 ;;
   'api -X '*|'issue edit '*|'label create '*|'issue close '*|'pr edit '*) echo '{}' ;;
-  'issue create '*) echo https://github.com/softbody-arcade/arcade-base/issues/1 ;;
+  'issue create '*) echo "https://github.com/softbody-arcade/arcade-base/issues/${NEW_ISSUE:-1}" ;;
   'project item-edit '*--value\ Done)
     if [[ ${MOVE_FAIL:-} ]]; then echo 'move failed' >&2; exit 7; fi
     echo '{}'
@@ -151,11 +192,30 @@ expect() {
   fi
 }
 wrote() { grep -Fq -- "$1" "$LOG"; }
+nowrites() {
+  if grep -E '^(api (-X|--method) (POST|PATCH|PUT|DELETE)( |$)|api graphql .*query=mutation|label create|project item-|issue (edit|create|close|reopen|comment)|pr (edit|comment))' "$LOG"; then exit 1; fi
+}
+absent() { if grep -F -- "$1" "$LOG"; then exit 1; fi; }
+ordered() {
+  local a b
+  a=$(grep -Fn -m1 -- "$1" "$LOG" | cut -d: -f1) || exit 1
+  b=$(grep -Fn -m1 -- "$2" "$LOG" | cut -d: -f1) || exit 1
+  [[ $a -lt $b ]] || exit 1
+}
+wrote_line() { grep -Eq -- "$1" "$LOG" || exit 1; }
+fresh() { : > "$LOG"; : > "$LOG.all"; }
 guard() {
   expect 1 "$@"
   [[ $(cat "$tmp/out") == "$1" ]]
-  ! grep -Eq '^(api -X|api graphql .*query=mutation|label create|project item-|issue (edit|create|close|reopen|comment)|pr (edit|comment))' "$LOG" || exit 1
+  nowrites
 }
+fresh
+MS_NONE=1 gh api repos/softbody-arcade/arcade-base/issues/1 --jq '.milestone == null' | grep -qx true
+ISSUES='{"softbody-arcade/arcade-base#22":{"state":"closed","milestone":null}}' gh api repos/softbody-arcade/arcade-base/issues/22 --jq .state | grep -qx closed
+MILESTONES='{"softbody-arcade/arcade-base":[{"number":2,"title":"1.2.0","state":"open"}]}' gh api --paginate 'repos/softbody-arcade/arcade-base/milestones?state=all&per_page=100' --jq '.[].title' | grep -qx 1.2.0
+MS_ISSUES='{"softbody-arcade/arcade-base#2":[[{"number":7}],[{"number":8}]]}' gh api --paginate 'repos/softbody-arcade/arcade-base/issues?milestone=2&state=open&per_page=100' --jq '.[].number' > "$tmp/pages"
+[[ $(cat "$tmp/pages") == $'7\n8' ]]
+fresh
 export READY="$tmp/ready"
 sections=(Goal Why Scope 'Done when' 'Constraints and known facts' 'Open questions' Links)
 for missing in "${sections[@]}"; do
@@ -193,6 +253,8 @@ LANE=Paused expect 0 Other list
 grep -Fxq Other "$tmp/out"
 grep -Fq '#1 Card' "$tmp/out"
 LANE=- expect 0 Other list
+expect 0 '' list
+wrote 'milestone{title state}'
 expect 0 Card list
 wrote 'items(first:50,after:$endCursor)'
 wrote 'pageInfo{hasNextPage endCursor}'

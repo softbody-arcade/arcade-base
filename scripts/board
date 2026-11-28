@@ -111,22 +111,23 @@ cards() {
     pageInfo{hasNextPage endCursor} nodes{
     status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}}
 
-    content{... on Issue{number title state milestone{title} issueType{name} issueFieldValues(first:100){nodes{... on IssueFieldSingleSelectValue{name field{... on IssueFieldSingleSelect{name}}}}} repository{nameWithOwner} labels(first:100){nodes{name}}
+    content{... on Issue{number title state milestone{title state} issueType{name} issueFieldValues(first:100){nodes{... on IssueFieldSingleSelectValue{name field{... on IssueFieldSingleSelect{name}}}}} repository{nameWithOwner} labels(first:100){nodes{name}}
     assignees(first:100){nodes{login}} issueDependenciesSummary{blockedBy}
     closedByPullRequestsReferences(first:20){nodes{url}}}}}}}}}' --jq '
     .data.'"$namespace"'.projectV2.items.nodes[] | select(.content.number != null) |
     [.content.repository.nameWithOwner,.content.number,(.status.name // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Priority")|.name][0] // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Effort")|.name][0] // "-"),(.content.issueType.name // "-"),((.content.milestone.title // "-")|gsub("[|]";"／")),
+    (.content.milestone.state // "-"),
     ([.content.labels.nodes[].name | select(.=="needs-decision")]|join(",")),
     ([.content.assignees.nodes[].login]|join(",")),([.content.closedByPullRequestsReferences.nodes[].url]|join(",")),
     .content.issueDependenciesSummary.blockedBy,.content.state,.content.title] | map(tostring) | join("|")'
 }
 parse() {
-  IFS='|' read -r game num lane field size type milestone labels assigned prs blockers state caption <<< "$1"
+  IFS='|' read -r game num lane field size type milestone mstate labels assigned prs blockers state caption <<< "$1"
 }
 load() {
   local rows row
   rows=$(cards)
-  unset game num field size type milestone labels assigned prs blockers state caption
+  unset game num field size type milestone mstate labels assigned prs blockers state caption
   lane=-
   while IFS= read -r row; do
     [[ $row == "$repo|$n|"* ]] || continue
@@ -136,6 +137,44 @@ load() {
 }
 edit_field() {
   gh project item-edit "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/$n" --field "$1" --value "$2" >/dev/null
+}
+valid_version() { [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
+version_greater() {
+  local a b i LC_ALL=C
+  local -a left right
+  IFS=. read -r -a left <<< "$1"
+  IFS=. read -r -a right <<< "$2"
+  for i in 0 1 2; do
+    a=${left[i]}; b=${right[i]}
+    if (( ${#a} > ${#b} )); then return 0; fi
+    if (( ${#a} < ${#b} )); then return 1; fi
+    if [[ $a > $b ]]; then return 0; fi
+    if [[ $a < $b ]]; then return 1; fi
+  done
+  return 1
+}
+next_minor() {
+  local major minor patch digit result= carry=1 i
+  IFS=. read -r major minor patch <<< "$1"
+  for ((i=${#minor}-1; i>=0; i--)); do
+    digit=${minor:i:1}
+    if [[ $carry == 1 ]]; then
+      if [[ $digit == 9 ]]; then digit=0; else digit=$((digit+1)); carry=0; fi
+    fi
+    result=$digit$result
+  done
+  [[ $carry == 0 ]] || result=1$result
+  printf '%s.%s.0\n' "$major" "$result"
+}
+repo_milestones() {
+  gh api --paginate "repos/$repo/milestones?state=all&per_page=100" --jq '.[] | [.number,.title,.state] | @tsv'
+}
+load_issue_version() {
+  local record
+  record=$(gh api "repos/$repo/issues/$1")
+  issue_state=$(jq -r '.state | ascii_upcase' <<< "$record")
+  issue_ms_title=$(jq -r '.milestone.title // ""' <<< "$record")
+  issue_ms_state=$(jq -r '.milestone.state // ""' <<< "$record")
 }
 classified() {
   [[ $type != - && $field != - ]] || refuse 'Set type and priority first'
