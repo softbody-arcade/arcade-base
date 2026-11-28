@@ -6,12 +6,13 @@ if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) ))
 fi
 shopt -s inherit_errexit
 usage() {
-  echo 'Usage: board list [--all] [lane] | waiting [--all] | show N | new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] | triage N TYPE PRIORITY [EFFORT] | effort N High|Medium|Low | priority N Urgent|High|Medium|Low | start N design|build | move N LANE [--staged SHA] | result N pass|fail|defer [--checks-file F] | release [vX.Y.Z] [--dry-run] | check | parent N PARENT | unparent N | milestone N x.y.z|none | block|unblock N --by M | decide N --file F | labels'
+  echo 'Usage: board list [--all] [lane] | waiting [--all] | show N | new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] [--milestone x.y.z] | triage N TYPE PRIORITY [EFFORT] [--milestone x.y.z] | effort N High|Medium|Low | priority N Urgent|High|Medium|Low | start N design|build | move N LANE [--staged SHA] | result N pass|fail|defer [--checks-file F] | release [vX.Y.Z] [--dry-run] | check | parent N PARENT | unparent N | milestone N x.y.z|none | block|unblock N --by M | decide N --file F | labels'
   echo 'Quote multiword titles. Triage moves Inbox cards to Backlog and updates fields in place in other lanes except Done. Omitted effort keeps its value or defaults to Medium.'
+  echo 'Triage keeps an open version or chooses the earliest open version. New issues with a priority also default to the earliest open version. Set --milestone x.y.z to choose one explicitly.'
   echo 'Start work from Next with start. Move from Design to Build after plan approval or from Review or Playtest to Build for rework. To rework merged work in Accepted, reopen the issue: the board returns it to Inbox for triage.'
   echo 'Stage or re-stage a work card with move N playtest --staged SHA using the full local commit SHA of its linked open PR.'
   echo 'Move an In-game check from Inbox, Backlog or Next to Playtest after setting priority. Move it from Playtest to Backlog to defer testing.'
-  echo 'Closed issues enter Accepted. Only release can move eligible cards to Done. Board refuses move N done. Release archives closed Done cards after 14 days without updates. Use --dry-run to preview changes.'
+  echo 'Closed issues enter Accepted. Only release can move eligible cards to Done. Board refuses move N done. Release archives closed Done cards after 14 days without updates and rolls open issues from released milestones to the next version. Use --dry-run to preview changes.'
   echo 'Requires jq, Bash 4.4+ and gh 2.106.0+ for project item-edit --field/--value.'
 }
 bad() { echo "$*" >&2; usage >&2; exit 2; }
@@ -111,22 +112,23 @@ cards() {
     pageInfo{hasNextPage endCursor} nodes{
     status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}}
 
-    content{... on Issue{number title state milestone{title} issueType{name} issueFieldValues(first:100){nodes{... on IssueFieldSingleSelectValue{name field{... on IssueFieldSingleSelect{name}}}}} repository{nameWithOwner} labels(first:100){nodes{name}}
+    content{... on Issue{number title state milestone{title state} issueType{name} issueFieldValues(first:100){nodes{... on IssueFieldSingleSelectValue{name field{... on IssueFieldSingleSelect{name}}}}} repository{nameWithOwner} labels(first:100){nodes{name}}
     assignees(first:100){nodes{login}} issueDependenciesSummary{blockedBy}
     closedByPullRequestsReferences(first:20){nodes{url}}}}}}}}}' --jq '
     .data.'"$namespace"'.projectV2.items.nodes[] | select(.content.number != null) |
-    [.content.repository.nameWithOwner,.content.number,(.status.name // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Priority")|.name][0] // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Effort")|.name][0] // "-"),(.content.issueType.name // "-"),((.content.milestone.title // "-")|gsub("[|]";"／")),
+    [.content.repository.nameWithOwner,.content.number,(.status.name // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Priority")|.name][0] // "-"),([.content.issueFieldValues.nodes[]|select(.field.name=="Effort")|.name][0] // "-"),(.content.issueType.name // "-"),((.content.milestone.title // "-")|gsub("[|\n\r]";"／")),
+    (.content.milestone.state // "-"),
     ([.content.labels.nodes[].name | select(.=="needs-decision")]|join(",")),
     ([.content.assignees.nodes[].login]|join(",")),([.content.closedByPullRequestsReferences.nodes[].url]|join(",")),
     .content.issueDependenciesSummary.blockedBy,.content.state,.content.title] | map(tostring) | join("|")'
 }
 parse() {
-  IFS='|' read -r game num lane field size type milestone labels assigned prs blockers state caption <<< "$1"
+  IFS='|' read -r game num lane field size type milestone mstate labels assigned prs blockers state caption <<< "$1"
 }
 load() {
   local rows row
   rows=$(cards)
-  unset game num field size type milestone labels assigned prs blockers state caption
+  unset game num field size type milestone mstate labels assigned prs blockers state caption
   lane=-
   while IFS= read -r row; do
     [[ $row == "$repo|$n|"* ]] || continue
@@ -137,9 +139,130 @@ load() {
 edit_field() {
   gh project item-edit "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/$n" --field "$1" --value "$2" >/dev/null
 }
+valid_version() { local LC_ALL=C; [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
+version_greater() {
+  local a b i LC_ALL=C
+  local -a left right
+  IFS=. read -r -a left <<< "$1"
+  IFS=. read -r -a right <<< "$2"
+  for i in 0 1 2; do
+    a=${left[i]}; b=${right[i]}
+    if (( ${#a} > ${#b} )); then return 0; fi
+    if (( ${#a} < ${#b} )); then return 1; fi
+    if [[ $a > $b ]]; then return 0; fi
+    if [[ $a < $b ]]; then return 1; fi
+  done
+  return 1
+}
+next_minor() {
+  local major minor digit result= carry=1 i
+  IFS=. read -r major minor _ <<< "$1"
+  for ((i=${#minor}-1; i>=0; i--)); do
+    digit=${minor:i:1}
+    if [[ $carry == 1 ]]; then
+      if [[ $digit == 9 ]]; then digit=0; else digit=$((digit+1)); carry=0; fi
+    fi
+    result=$digit$result
+  done
+  [[ $carry == 0 ]] || result=1$result
+  printf '%s.%s.0\n' "$major" "$result"
+}
+repo_milestones() {
+  gh api --paginate "repos/$repo/milestones?state=all&per_page=100" --jq '.[] | [.number,.title,.state] | @tsv'
+}
+ensure_milestone() {
+  local version=$1 rows number ms_title state output
+  rows=$(repo_milestones)
+  while IFS=$'\t' read -r number ms_title state; do
+    [[ $ms_title == "$version" ]] || continue
+    [[ $state == open ]] || refuse "Milestone $version is already released"
+    return
+  done <<< "$rows"
+  if output=$(command gh api -X POST "repos/$repo/milestones" -f "title=$version" 2>&1); then return; fi
+  if [[ $output == *already_exists* || $output == *'already exists'* ]]; then
+    rows=$(repo_milestones)
+    while IFS=$'\t' read -r number ms_title state; do
+      [[ $ms_title == "$version" ]] || continue
+      [[ $state == open ]] || refuse "Milestone $version is already released"
+      return
+    done <<< "$rows"
+  fi
+  error "$output"
+}
+load_issue_version() {
+  local record
+  record=$(gh api "repos/$repo/issues/$1")
+  issue_state=$(jq -r '.state | ascii_upcase' <<< "$record")
+  issue_ms_title=$(jq -r '(.milestone.title // "") + "|"' <<< "$record")
+  issue_ms_title=${issue_ms_title%|}
+  issue_ms_state=$(jq -r '.milestone.state // ""' <<< "$record")
+}
+open_issue_version() { [[ $issue_ms_state == open ]] && valid_version "$issue_ms_title"; }
+reset_issue_version() {
+  issue_state=OPEN issue_ms_title= issue_ms_state=
+}
+resolve_version() {
+  local explicit=${1:-} rows ms_title ms_state
+  chosen= chosen_how=
+  if [[ -n $explicit ]]; then
+    valid_version "$explicit" || bad "Invalid version: $explicit"
+    chosen=$explicit chosen_how=given
+  elif open_issue_version; then
+    chosen=$issue_ms_title chosen_how=kept
+    return
+  fi
+  rows=$(repo_milestones)
+  while IFS=$'\t' read -r _ ms_title ms_state; do
+    if [[ -n $explicit ]]; then
+      [[ $ms_title == "$explicit" && $ms_state != open ]] && refuse "Milestone $explicit is already released"
+      continue
+    fi
+    [[ $ms_state == open ]] && valid_version "$ms_title" || continue
+    if [[ -z $chosen ]] || version_greater "$chosen" "$ms_title"; then
+      chosen=$ms_title chosen_how=defaulted
+    fi
+  done <<< "$rows"
+  [[ -n $chosen ]] || refuse "No open version milestone: pass --milestone x.y.z${n:+ or run board milestone $n x.y.z}"
+}
+apply_version() {
+  load_issue_version "$1"
+  ensure_milestone "$chosen"
+  if [[ $issue_ms_title != "$chosen" ]]; then issue edit "$1" --milestone "$chosen" >/dev/null; fi
+  echo "Version: $chosen ($chosen_how)"
+}
+parse_ticket_options() {
+  positionals=()
+  requested_version= body_file=
+  while (($#)) && [[ $1 != --milestone && $1 != --body-file ]]; do
+    positionals+=("$1")
+    shift
+  done
+  while (($#)); do
+    case $1 in
+      --milestone)
+        [[ -z $requested_version ]] || bad 'Duplicate --milestone'
+        (($# >= 2)) || bad 'Expected --milestone x.y.z'
+        valid_version "$2" || bad "Invalid version: $2"
+        requested_version=$2
+        ;;
+      --body-file)
+        [[ $cmd == new ]] || bad 'Unexpected --body-file'
+        [[ -z $body_file ]] || bad 'Duplicate --body-file'
+        [[ $# -ge 2 && $2 != --milestone && $2 != --body-file ]] || bad 'Expected --body-file F'
+        file "$2"
+        body_file=$2
+        ;;
+      *) bad "Unexpected argument: $1" ;;
+    esac
+    shift 2
+  done
+}
 classified() {
   [[ $type != - && $field != - ]] || refuse 'Set type and priority first'
   [[ $size != - ]] || refuse 'Set effort first'
+  if [[ $state == OPEN ]]; then
+    [[ $mstate == OPEN ]] && valid_version "$milestone" || refuse "Set a valid open version first: board milestone $n x.y.z"
+  fi
 }
 set_select() {
   local ids fid opt node
@@ -217,6 +340,63 @@ release_action() {
   done <<< "$prs"
   if [[ -n $shipped ]]; then echo move; else echo "$action"; fi
 }
+rollover_plan() {
+  local rows number source state highest= issues candidate target
+  local -a open_versions=() sources=()
+  local -A source_issues=()
+  roll_create= roll_moves=
+  rows=$(repo_milestones)
+  while IFS=$'\t' read -r number source state; do
+    valid_version "$source" || continue
+    if [[ -z $highest ]] || version_greater "$source" "$highest"; then highest=$source; fi
+    if [[ $state == open ]]; then
+      open_versions+=("$source")
+    elif [[ $state == closed ]]; then
+      issues=$(gh api --paginate "repos/$repo/issues?milestone=$number&state=open&per_page=100" --jq '.[] | select(has("pull_request") | not) | .number')
+      if [[ -n $issues ]]; then
+        sources+=("$source")
+        source_issues[$source]=$issues
+      fi
+    fi
+  done <<< "$rows"
+
+  for source in "${sources[@]}"; do
+    target=
+    for candidate in "${open_versions[@]}"; do
+      version_greater "$candidate" "$source" || continue
+      if [[ -z $target ]] || version_greater "$target" "$candidate"; then target=$candidate; fi
+    done
+    if [[ -z $target ]]; then
+      [[ -n $roll_create ]] || roll_create=$(next_minor "$highest")
+      target=$roll_create
+    fi
+    while IFS= read -r number; do
+      roll_moves+="$number $source $target"$'\n'
+    done <<< "${source_issues[$source]}"
+  done
+}
+rollover_apply() {
+  local number source target
+  if [[ -n $roll_create ]]; then
+    if [[ $dry_run == true ]]; then
+      echo "Milestone $roll_create would be created"
+    else
+      ensure_milestone "$roll_create"
+      echo "Milestone $roll_create created"
+    fi
+  fi
+  while read -r number source target; do
+    [[ -n $number ]] || continue
+    if [[ $dry_run == true ]]; then
+      echo "#$number would move to $target"
+    else
+      load_issue_version "$number"
+      [[ $issue_state == OPEN && $issue_ms_title == "$source" && $issue_ms_state == closed ]] || continue
+      issue edit "$number" --milestone "$target" >/dev/null
+      echo "#$number moved to $target"
+    fi
+  done <<< "$roll_moves"
+}
 owned_entries() {
   gh api --paginate "$1" | jq -c --arg login "$me" '.[] | select(.user.login == $login)'
 }
@@ -293,6 +473,7 @@ case $cmd in
     if [[ $lane == Done ]]; then action=archive; else action=$(release_action "$state" "$reason" "$type"); fi
     plan+=("$action $n $project_id $item")
   done <<< "$rows"
+  rollover_plan
   if (( ${#plan[@]} == 0 )); then echo "No board changes${tag:+ for $tag}"; fi
   for row in "${plan[@]}"; do
     read -r action n project_id item <<< "$row"
@@ -320,6 +501,7 @@ case $cmd in
       wait) echo "#$n waiting for a release";;
     esac
   done
+  rollover_apply
   ;;
  list|waiting|check)
   all=false filter=
@@ -344,6 +526,12 @@ case $cmd in
         [[ $type != - ]] || problem "#$num missing type"
         [[ $field != - ]] || problem "#$num missing priority"
         [[ $size != - ]] || problem "#$num missing effort"
+      fi
+      if [[ $lane != Inbox ]]; then
+        if [[ $mstate == - ]]; then problem "#$num missing version"
+        elif ! valid_version "$milestone"; then problem "#$num version \"$milestone\" is not x.y.z"
+        elif [[ $mstate == CLOSED ]]; then problem "#$num version $milestone is already released"
+        fi
       fi
       if [[ $lane == Next && $blockers != 0 ]]; then problem "#$num blocked in Next"; fi
       continue
@@ -380,16 +568,24 @@ LABELS
  new)
   (($# >= 2)) || bad 'Missing type or title'
   k=$(kind "$1"); shift
+  parse_ticket_options "$@"
+  set -- "${positionals[@]}"
   args=(--body '')
-  if (( $# >= 3 )) && [[ ${@: -2:1} == --body-file ]]; then
-    file "${!#}"; args=(--body-file "${!#}")
-    set -- "${@:1:$#-2}"
-  fi
+  if [[ -n $body_file ]]; then args=(--body-file "$body_file"); fi
   p= requested_size=
   if (( $# >= 2 )); then priority "$1"; p=$1; shift; fi
   if (( $# >= 2 )); then effort "$1"; requested_size=$1; shift; fi
   [[ $# == 1 && -n $1 ]] || bad 'Expected one title'
-  project; create "$k" "$p" "$requested_size" "$1" Backlog "${args[@]}"
+  project
+  chosen= n=
+  if [[ -n $p || -n $requested_version ]]; then
+    reset_issue_version
+    resolve_version "$requested_version"
+    ensure_milestone "$chosen"
+    args+=(--milestone "$chosen")
+  fi
+  create "$k" "$p" "$requested_size" "$1" Backlog "${args[@]}"
+  if [[ -n $chosen ]]; then echo "Version: $chosen ($chosen_how)"; fi
   ;;
  parent|unparent|milestone|show|effort|priority|decide|block|unblock|triage|move|start|result)
   n=${1:-}; issue_id "$n" >/dev/null; shift
@@ -431,8 +627,17 @@ LABELS
     gh api graphql -f child="$child" -f par="$par" -f query="mutation(\$child:ID!,\$par:ID!){$op(input:{issueId:\$par,subIssueId:\$child}){clientMutationId}}"
     ;;
    milestone)
-    [[ $# == 1 && $1 =~ ^(none|[0-9]+\.[0-9]+\.[0-9]+)$ ]] || bad 'Expected x.y.z or none'
-    if [[ $1 == none ]]; then issue edit "$n" --remove-milestone; else issue edit "$n" --milestone "$1"; fi
+    [[ $# == 1 ]] || bad 'Expected x.y.z or none'
+    [[ $1 == none ]] || valid_version "$1" || bad 'Expected x.y.z or none'
+    if [[ $1 == none ]]; then
+      project; load
+      load_issue_version "$n"
+      [[ $issue_state != OPEN || $lane == Inbox ]] || refuse 'An open issue outside Inbox needs a version'
+      issue edit "$n" --remove-milestone
+    else
+      ensure_milestone "$1"
+      issue edit "$n" --milestone "$1"
+    fi
     ;;
    decide)
     [[ $# == 2 && $1 == --file ]] || bad 'Expected --file F'
@@ -451,12 +656,20 @@ LABELS
     [[ $lane != - ]] || refuse "Issue #$n has no board status"
     case $cmd in
      triage)
+      parse_ticket_options "$@"
+      set -- "${positionals[@]}"
       (($# == 2 || $# == 3)) || bad 'Expected type, priority and optional effort'
       selected=${3:-$size}
       [[ $selected != - || $# == 3 ]] || selected=Medium
       effort "$selected"
       k=$(kind "$1"); priority "$2"
       [[ $lane != Done ]] || refuse 'Cannot triage a Done card'
+      load_issue_version "$n"
+      [[ -z $requested_version || $issue_state == OPEN ]] || refuse 'A closed issue takes no version'
+      if [[ $issue_state == OPEN ]]; then
+        resolve_version "$requested_version"
+        apply_version "$n"
+      fi
       issue edit "$n" --type "$k" >/dev/null
       set_select Priority "$2"
       set_select Effort "$selected"
@@ -486,10 +699,15 @@ LABELS
       [[ $# != 3 || $type != 'In-game check' ]] || bad 'Unexpected --staged'
       if [[ $type == 'In-game check' && $dest == Playtest && $lane =~ ^(Inbox|Backlog|Next)$ ]]; then
         [[ $field != - ]] || refuse 'Set type and priority first'
+        if [[ $state == OPEN ]]; then
+          load_issue_version "$n"
+          resolve_version
+          apply_version "$n"
+        fi
         if [[ $size == - ]]; then set_select Effort Medium; fi
       else
-        [[ $dest == Inbox ]] || classified
         [[ $lane != Inbox || $dest == Inbox ]] || refuse 'Use triage to leave Inbox'
+        [[ $dest == Inbox ]] || classified
         [[ $lane != Backlog || $dest =~ ^(Inbox|Backlog|Next)$ ]] || refuse 'Move ready work to Next first'
         [[ $lane != Next || $dest =~ ^(Inbox|Backlog|Next)$ ]] || refuse 'Use start to leave Next for active work'
       fi
@@ -518,8 +736,14 @@ LABELS
         if [[ $outcome == fail ]]; then
           marker="Failed in-game check #$original"
           existing=$(find_created "$marker" Bug)
-          if [[ -z $existing ]]; then create Bug '' '' "Failed check: $caption" Inbox --body "$marker"$'\n'"$notes"
-          else gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/${existing%%$'\n'*}" >/dev/null; fi
+          if [[ -z $existing ]]; then
+            load_issue_version "$original"
+            version_args=()
+            if open_issue_version; then version_args=(--milestone "$issue_ms_title"); fi
+            create Bug '' '' "Failed check: $caption" Inbox --body "$marker"$'\n'"$notes" "${version_args[@]}"
+          else
+            gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/${existing%%$'\n'*}" >/dev/null
+          fi
         fi
         comment_once issue "$original" "Playtest $outcome"$'\n'"$notes"
         issue close "$original"
@@ -543,21 +767,39 @@ LABELS
             checklist+="- [ ] $line"$'\n'
           done <<< "$notes"
           build="Build: $head ($open_pr), work card #$original"
-          existing=$(find_created "$build" 'In-game check')
-          if [[ -n $existing ]]; then
-            n=${existing%%$'\n'*}
-            gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/$n"
-            load
-            if [[ $lane == Inbox || $lane == - ]]; then
-              set_select Priority "$p"
-              if [[ ${size:--} == - ]]; then set_select Effort Medium; fi
-              edit_field Status Playtest
+          check_number=$(find_created "$build" 'In-game check')
+          check_number=${check_number%%$'\n'*}
+          if [[ -n $check_number ]]; then
+            load_issue_version "$check_number"
+            if [[ $issue_state == OPEN ]]; then
+              if ! open_issue_version; then
+                load_issue_version "$original"
+                resolve_version
+                apply_version "$check_number"
+              fi
+              n=$check_number
+              gh project item-add "$project_number" --owner "$owner" --url "https://github.com/$repo/issues/$n"
+              load
+              if [[ $lane != Playtest ]]; then
+                if [[ ${field:--} == - ]]; then set_select Priority "$p"; fi
+                if [[ ${size:--} == - ]]; then set_select Effort Medium; fi
+                edit_field Status Playtest
+              fi
             fi
           else
-            create 'In-game check' "$p" Medium "Deferred checks: $caption" Playtest --body "$build"$'\n\n'"$checklist"
+            load_issue_version "$original"
+            resolve_version
+            ensure_milestone "$chosen"
+            create 'In-game check' "$p" Medium "Deferred checks: $caption" Playtest --body "$build"$'\n\n'"$checklist" --milestone "$chosen"
+            echo "Version: $chosen ($chosen_how)"
+            check_number=$n
           fi
-          report+=". Deferred to #$n"
+          report+=". Deferred to #$check_number"
         elif [[ $outcome == fail ]]; then
+          load_issue_version "$original"
+          if [[ $issue_state == OPEN ]] && ! open_issue_version; then
+            refuse "Set a valid open version before a failed playtest: board milestone $original x.y.z"
+          fi
           body=$(pr view "$pull" --json body --jq .body)
           if ! grep -Eq "^- \[[ xX]\] Playtest fail for #$original at $head([[:space:]]|$)" <<< "$body"; then
             pr edit "$pull" --body "$body"$'\n\n- [ ] '"$report ${notes//$'\n'/ }"

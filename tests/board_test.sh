@@ -14,7 +14,13 @@ export LOG="$tmp/log" PATH="$tmp:$PATH" LANE=Next ASSIGNED=- BLOCKERS=0
 cat > "$tmp/gh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "$LOG"
+[[ -v LANES ]] || LANES='{}'
+[[ -v ISSUES ]] || ISSUES='{}'
+[[ -v MS_ISSUES ]] || MS_ISSUES='{}'
+line=${*//$'\n'/ }
+record_state() { printf '%s\n' "$line" >> "$LOG.state"; }
+printf '%s\n' "$line" >> "$LOG"
+printf '%s\n' "$line" >> "$LOG.all"
 api_response() {
   if [[ ${1:-} == --jq ]]; then jq -r "$2"; else cat; fi
 }
@@ -69,7 +75,6 @@ case "$*" in
   'api repos/'*'/releases/tags/'*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   'api graphql '*projectV2*)
     status=$LANE
-    if grep -q 'issue create --title Deferred' "$LOG"; then status=Inbox; fi
     if [[ -n ${DELAY_INBOX:-} ]]; then
       status=-
       if [[ -f $LOG.slept ]]; then status=Inbox; fi
@@ -77,14 +82,17 @@ case "$*" in
     jq -n --arg lane "$status" --arg priority "${FIELD-High}" --arg effort "${SIZE-Low}" \
       --arg type "${TYPE-Feature}" --arg state "${STATE:-OPEN}" --arg label "${TAGS:-}" \
       --arg assigned "$ASSIGNED" --arg prs "${PRS:-}" --arg merged "${MERGED_PRS:-}" --argjson blockers "$BLOCKERS" \
+      --arg ms_title "${MS_TITLE-1.0.0}" --arg ms_state "${MS_STATE-OPEN}" --arg ms_none "${MS_NONE:-}" \
+      --argjson lanes "$LANES" --arg new_issue "${NEW_ISSUE:-}" \
+      --arg created "$(if grep -q 'issue create --title Deferred' "$LOG.all"; then echo yes; fi)" \
       --argjson count "${CARD_COUNT:-1}" --argjson others "${OTHER_COUNT:-0}" --arg otherrepo "${OTHER_REPO:-softbody-arcade/other}" --arg owner "${OWNER_TYPE:-Organization}" '
       def nodes($values; key): {nodes: [$values | split(",")[] | select(. != "" and . != "-") | key]};
       {data: {($owner|ascii_downcase): {projectV2: {items: {nodes: [
         {content: null}, {content: {}},
-        (range(1; $count+$others+1) as $n | {
-          status: (if $lane == "-" then null else {name: $lane} end),
-          content: {repository: {nameWithOwner: (if $n > $count then $otherrepo else "softbody-arcade/arcade-base" end)},
-            number: $n, title: "Card", state: $state, milestone: {title: "v1"},
+        ((range(1; $count+$others+1), (select($created == "yes" and $new_issue != "") | $new_issue|tonumber | select(. > $count+$others))) as $n | {
+          status: ((if $created == "yes" and $new_issue == ($n|tostring) then "Inbox" else ($lanes[($n|tostring)] // $lane) end) | if . == "-" then null else {name: .} end),
+          content: {repository: {nameWithOwner: (if $n > $count and $n <= $count+$others then $otherrepo else "softbody-arcade/arcade-base" end)},
+            number: $n, title: "Card", state: $state, milestone: (if $ms_none == "1" then null else {title: $ms_title, state: $ms_state} end),
             issueType: (if $type == "-" then null else {name: $type} end),
             issueFieldValues: {nodes: [
               ({field: {name: "Priority"}, name: $priority}, {field: {name: "Effort"}, name: $effort})
@@ -107,6 +115,33 @@ case "$*" in
   'pr comment '*) echo '{}' ;;
   'api user '*) echo me ;;
   'issue view '*--json\ body*) cat "$READY" ;;
+  'api --paginate '*'/milestones?state=all&per_page=100'*)
+    [[ -z ${MS_LIST_FAIL:-} ]] || exit 7
+    endpoint=${3#repos/}; repo_key=${endpoint%%/milestones*}
+    milestones=${MILESTONES:-'{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"open"}]}'}
+    jq -Rn --argjson data "$milestones" --arg repo "$repo_key" '
+      ($data[$repo] // []) + [inputs | split("\t") | select(.[0] == "milestone" and .[1] == $repo)
+        | {title:.[2],state:.[3]}] | to_entries | map(.value + {number:(.value.number // (1000+.key))})' < "$LOG.state" | api_response "${@:4}"
+    ;;
+  'api --paginate '*'/issues?milestone='*)
+    endpoint=${3#repos/}; repo_key=${endpoint%%/issues*}; query=${endpoint#*milestone=}; ms_num=${query%%&*}
+    pages=$(jq -c --arg key "$repo_key#$ms_num" '.[$key] // []' <<< "$MS_ISSUES")
+    count=$(jq 'length' <<< "$pages")
+    for ((page=1; page<=count; page++)); do
+      [[ ${LIST_FAIL:-} != "$repo_key#$ms_num:$page" ]] || exit 7
+      jq -c ".[ $((page-1)) ]" <<< "$pages" | api_response "${@:4}"
+    done
+    ;;
+  'api -X POST repos/'*'/milestones '*)
+    endpoint=${4#repos/}; repo_key=${endpoint%/milestones}
+    if [[ ${POST_EXISTS:-} == 1 ]]; then
+      if [[ ${RACE_NONE:-} != 1 ]]; then printf 'milestone\t%s\t%s\t%s\n' "$repo_key" "${6#title=}" "${RACE_STATE:-open}" >> "$LOG.state"; fi
+      echo '{"message":"Validation Failed","errors":[{"resource":"Milestone","code":"already_exists","field":"title"}]}'; echo 'gh: Validation Failed (HTTP 422)' >&2; exit 1
+    fi
+    if [[ ${POST_FAIL:-} == 1 ]]; then echo 'POST failed' >&2; exit 1; fi
+    printf 'milestone\t%s\t%s\topen\n' "$repo_key" "${6#title=}" >> "$LOG.state"
+    echo '{}'
+    ;;
   'api --paginate '*'/issues?state='*)
     jq -n --arg existing "${EXISTING:-}" --arg author "${CREATOR:-me}" --arg head "$HEAD_SHA" --arg prs "$PRS" '
       [select($existing != "") | {number: ($existing|tonumber), user:{login:$author}, author_association:"MEMBER"}
@@ -114,13 +149,26 @@ case "$*" in
           {type:{name:"In-game check"}, body:("Build: " + $head + " (" + $prs + "), work card #1")})]' | api_response "${@:4}"
     ;;
   'api repos/'*'/issues/'*)
-    jq -n --arg id "${2##*/}" '{id:123} + (if $id == "33" then {pull_request:{url:"https://example.com/pr"}} else {} end)' | api_response "${@:3}"
+    endpoint=${2#repos/}; repo_key=${endpoint%/issues/*}; id=${2##*/}
+    touch "$LOG.state"
+    edited=$(sed -n "s|^issue edit $id --milestone \([^ ]*\) --repo $repo_key\$|\1|p; s|^issue edit $id --remove-milestone --repo $repo_key\$|__none__|p" "$LOG.state" | tail -n 1)
+    milestones=${MILESTONES:-'{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"open"}]}'}
+    jq -n --arg id "$id" --arg repo "$repo_key" --arg state "${ISSUE_STATE:-${STATE:-OPEN}}" \
+      --arg title "${MS_TITLE-1.0.0}" --arg msstate "${MS_STATE-OPEN}" --arg none "${MS_NONE:-}" \
+      --arg edited "$edited" --argjson issues "$ISSUES" --argjson milestones "$milestones" '
+      ({state:($state|ascii_downcase), milestone:(if $none == "1" then null else {title:$title,state:($msstate|ascii_downcase)} end)}
+       + ($issues[($repo + "#" + $id)] // {})
+       | if $edited == "__none__" then .milestone = null elif $edited != "" then .milestone = ([$milestones[$repo][]? | select(.title == $edited)][0] // {title:$edited,state:"open"}) else . end)
+      + {id:123} + (if $id == "33" then {pull_request:{url:"https://example.com/pr"}} else {} end)' | api_response "${@:3}"
     ;;
   'pr view '*--json\ body*) echo "${BODY:-}" ;;
-  'issue edit '*--milestone\ 9.9.9*) echo 'milestone not found' >&2; exit 7 ;;
+  'issue edit '*--milestone*)
+    if [[ -n ${EDIT_FAIL:-} && $3 == "$EDIT_FAIL" ]]; then exit 7; fi
+    record_state; echo '{}' ;;
   'api repos/'*) echo 123 ;;
-  'api -X '*|'issue edit '*|'label create '*|'issue close '*|'pr edit '*) echo '{}' ;;
-  'issue create '*) echo https://github.com/softbody-arcade/arcade-base/issues/1 ;;
+  'issue edit '*) record_state; echo '{}' ;;
+  'api -X '*|'label create '*|'issue close '*|'pr edit '*) echo '{}' ;;
+  'issue create '*) echo "https://github.com/softbody-arcade/arcade-base/issues/${NEW_ISSUE:-1}" ;;
   'project item-edit '*--value\ Done)
     if [[ ${MOVE_FAIL:-} ]]; then echo 'move failed' >&2; exit 7; fi
     echo '{}'
@@ -151,11 +199,43 @@ expect() {
   fi
 }
 wrote() { grep -Fq -- "$1" "$LOG"; }
+nowrites() {
+  if grep -E '^(api (-X|--method) (POST|PATCH|PUT|DELETE)( |$)|api graphql .*query=mutation|label create|project item-|issue (edit|create|close|reopen|comment)|pr (edit|comment))' "$LOG"; then exit 1; fi
+}
+absent() { if grep -F -- "$1" "$LOG"; then exit 1; fi; }
+ordered() {
+  local a b
+  a=$(grep -Fn -m1 -- "$1" "$LOG" | cut -d: -f1) || exit 1
+  b=$(grep -Fn -m1 -- "$2" "$LOG" | cut -d: -f1) || exit 1
+  [[ $a -lt $b ]] || exit 1
+}
+wrote_line() { grep -Eq -- "$1" "$LOG" || exit 1; }
+fresh() { : > "$LOG"; : > "$LOG.all"; : > "$LOG.state"; }
+# Stub self-checks: failure injection must fire, a failed edit must not change the modelled milestone,
+# a removed milestone must read back as none, and one repo's edit must not touch another repo's issue.
+fresh
+rc=0; EDIT_FAIL=5 gh issue edit 5 --milestone 1.0.0 --repo softbody-arcade/arcade-base >/dev/null 2>&1 || rc=$?
+[[ $rc == 7 ]] || { echo 'Stub: EDIT_FAIL did not fire' >&2; exit 1; }
+rc=0; EDIT_FAIL=5 gh issue edit 5 --milestone 9.9.9 --repo softbody-arcade/arcade-base >/dev/null 2>&1 || rc=$?
+[[ $rc == 7 ]] || { echo 'Stub: failed edit did not fail' >&2; exit 1; }
+[[ $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq .milestone.title) == 1.0.0 ]] || { echo 'Stub: a failed edit changed the milestone' >&2; exit 1; }
+gh issue edit 5 --milestone 2.0.0 --repo softbody-arcade/other >/dev/null
+[[ $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq .milestone.title) == 1.0.0 ]] || { echo 'Stub: another repo edit leaked' >&2; exit 1; }
+gh issue edit 5 --remove-milestone --repo softbody-arcade/arcade-base >/dev/null
+[[ $(gh api repos/softbody-arcade/arcade-base/issues/5 --jq '.milestone') == null ]] || { echo 'Stub: remove-milestone not modelled' >&2; exit 1; }
+fresh
 guard() {
   expect 1 "$@"
   [[ $(cat "$tmp/out") == "$1" ]]
-  ! grep -Eq '^(api -X|api graphql .*query=mutation|label create|project item-|issue (edit|create|close|reopen|comment)|pr (edit|comment))' "$LOG" || exit 1
+  nowrites
 }
+fresh
+MS_NONE=1 gh api repos/softbody-arcade/arcade-base/issues/1 --jq '.milestone == null' | grep -qx true
+ISSUES='{"softbody-arcade/arcade-base#22":{"state":"closed","milestone":null}}' gh api repos/softbody-arcade/arcade-base/issues/22 --jq .state | grep -qx closed
+MILESTONES='{"softbody-arcade/arcade-base":[{"number":2,"title":"1.2.0","state":"open"}]}' gh api --paginate 'repos/softbody-arcade/arcade-base/milestones?state=all&per_page=100' --jq '.[].title' | grep -qx 1.2.0
+MS_ISSUES='{"softbody-arcade/arcade-base#2":[[{"number":7}],[{"number":8}]]}' gh api --paginate 'repos/softbody-arcade/arcade-base/issues?milestone=2&state=open&per_page=100' --jq '.[].number' > "$tmp/pages"
+[[ $(cat "$tmp/pages") == $'7\n8' ]]
+fresh
 export READY="$tmp/ready"
 sections=(Goal Why Scope 'Done when' 'Constraints and known facts' 'Open questions' Links)
 for missing in "${sections[@]}"; do
@@ -193,6 +273,8 @@ LANE=Paused expect 0 Other list
 grep -Fxq Other "$tmp/out"
 grep -Fq '#1 Card' "$tmp/out"
 LANE=- expect 0 Other list
+expect 0 '' list
+wrote 'milestone{title state}'
 expect 0 Card list
 wrote 'items(first:50,after:$endCursor)'
 wrote 'pageInfo{hasNextPage endCursor}'
@@ -206,7 +288,7 @@ OWNER_TYPE=User expect 0 Card list --all
 wrote 'user(login:$owner)'
 LANE=Accepted STATE=CLOSED guard 'To rework merged work, reopen #1: the board returns it to Inbox, then triage it again' move 1 build
 LANE=Accepted guard '#1 is already open: move it to Inbox with board move 1 inbox, then triage it again' move 1 build
-LANE=Accepted expect 0 '' move 1 inbox
+LANE=Accepted MS_NONE=1 expect 0 '' move 1 inbox
 wrote '--field Status --value Inbox'
 LANE=Inbox guard 'Use start from Next to enter Design or Build' move 1 build
 LANE=Review expect 0 '' move 1 build
@@ -232,13 +314,14 @@ expect 1 'did not enter Inbox' new feature High Card
 DELAY_INBOX=1 expect 0 '' new feature High Card
 diff -u - "$tmp/out" <<'URL'
 https://github.com/softbody-arcade/arcade-base/issues/1
+Version: 1.0.0 (defaulted)
 URL
 [[ -f $LOG.slept ]]
 order() { [[ $(sed -n 's/.*--field \([^ ]*\) --value .*/\1/p' "$LOG") == Status ]]; }
 order
 wrote 'issue create --title Card --type Feature'
 LANE=Inbox expect 0 '' triage 1 bug Medium
-[[ ! -s $tmp/out ]]
+[[ $(cat "$tmp/out") == 'Version: 1.0.0 (kept)' ]]
 wrote 'issue edit 1 --type Bug'
 wrote 'setIssueFieldValue'
 order
@@ -262,6 +345,124 @@ for source in Backlog Next Design Build Review Playtest Accepted; do
   wrote 'select(.name=="Medium")'
   ! wrote 'project item-edit' || exit 1
 done
+open_versions() {
+  jq -nc --args '{"softbody-arcade/arcade-base": ($ARGS.positional | to_entries | map({number:(.key+1),title:.value,state:"open"}))}' -- "$@"
+}
+earliest_version() {
+  fresh
+  local expected=$1
+  shift
+  LANE=Inbox MS_NONE=1 MILESTONES=$(open_versions "$@") expect 0 "Version: $expected (defaulted)" triage 1 task High
+  ordered "issue edit 1 --milestone $expected" 'issue edit 1 --type'
+}
+earliest_version 1.3.0 1.4.0 1.3.0
+earliest_version 0.9.0 0.10.0 0.9.0
+earliest_version 1.10.0 1.20.0 1.10.0
+earliest_version 1.0.0 99999999999999999999.0.0 1.0.0
+earliest_version 1.3.0 "\$(touch \"$tmp/pwned\")" Later 1.3.0
+earliest_version 1.3.0 0.9 1.3.0
+earliest_version 2.0.0 18446744073709551617.0.0 2.0.0
+[[ ! -e $tmp/pwned ]]
+fresh
+LANE=Inbox MS_TITLE=Later MILESTONES=$(open_versions Later 1.3.0) expect 0 'Version: 1.3.0 (defaulted)' triage 1 task High
+fresh
+versions=$(open_versions 1.3.0 1.4.0)
+MS_TITLE=1.4.0 MILESTONES=$versions expect 0 'Version: 1.4.0 (kept)' triage 1 task High
+absent 'issue edit 1 --milestone'
+absent 'api -X POST'
+MS_TITLE=1.4.0 MILESTONES=$versions expect 0 'Version: 1.9.0 (given)' triage 1 task High Low --milestone 1.9.0
+ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue edit 1 --milestone 1.9.0'
+ordered 'issue edit 1 --milestone 1.9.0' 'issue edit 1 --type'
+closed='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.3.0","state":"closed"}]}'
+for source in Inbox Backlog; do
+  fresh
+  LANE=$source MS_TITLE=1.2.0 MS_STATE=CLOSED MILESTONES=$versions expect 0 'Version: 1.3.0 (defaulted)' triage 1 task High
+  wrote 'issue edit 1 --milestone 1.3.0'
+done
+fresh
+expect 2 'Invalid version: 01.0.0' triage 1 task High --milestone 01.0.0
+nowrites
+MILESTONES=$closed guard 'Milestone 1.3.0 is already released' triage 1 task High --milestone 1.3.0
+MS_NONE=1 MILESTONES=$closed guard 'No open version milestone: pass --milestone x.y.z or run board milestone 1 x.y.z' triage 1 task High
+for source in Accepted Inbox; do
+  STATE=CLOSED LANE=$source MS_NONE=1 MILESTONES=$closed expect 0 '' triage 1 task High Low
+  [[ ! -s $tmp/out ]]
+  wrote 'issue edit 1 --type Task'
+  wrote '-f field=FIELD -f option=OPTION'
+  wrote '-f field=SIZEFIELD -f option=SIZEOPTION'
+  absent 'issue edit 1 --milestone'
+  absent 'api -X POST'
+  if [[ $source == Inbox ]]; then wrote '--field Status --value Backlog'; else absent 'project item-edit'; fi
+done
+expect 2 'Unexpected --body-file' triage 1 task High --body-file "$READY"
+nowrites
+LANE=Inbox MS_STATE=CLOSED guard 'Use triage to leave Inbox' move 1 backlog
+LANE=Done MS_NONE=1 guard 'Cannot triage a Done card' triage 1 task High --milestone 1.9.0
+STATE=CLOSED LANE=Accepted MS_NONE=1 guard 'A closed issue takes no version' triage 1 task High --milestone 1.9.0
+fresh
+OWNER_TYPE=Bogus expect 0 '' milestone 1 1.2.0
+wrote 'issue edit 1 --milestone 1.2.0'
+fresh
+for first in body milestone; do
+  fresh
+  if [[ $first == body ]]; then opts=(--body-file "$READY" --milestone 1.3.0)
+  else opts=(--milestone 1.3.0 --body-file "$READY"); fi
+  LANE=Inbox expect 0 'Version: 1.3.0 (given)' new task High Medium T "${opts[@]}"
+  wrote_line 'issue create.*--title T.*--milestone 1[.]3[.]0'
+  wrote "issue create --title T --type Task --body-file $READY"
+  ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue create'
+done
+fresh
+for option in --milestone --body-file; do
+  val=1.3.0
+  if [[ $option == --body-file ]]; then val=$READY; fi
+  if [[ $option == --body-file ]]; then missing='Expected --body-file F'; else missing='Expected --milestone x.y.z'; fi
+  expect 2 "Duplicate $option" new task T "$option" "$val" "$option" "$val"
+  nowrites
+  expect 2 "$missing" new task T "$option"
+  nowrites
+  expect 2 'Unexpected argument: T' new task High "$option" "$val" T
+  nowrites
+  expect 2 "$missing" new task "$option"
+  nowrites
+done
+expect 2 'Invalid version: 01.0.0' new task T --milestone 01.0.0
+nowrites
+MILESTONES=$closed guard 'Milestone 1.3.0 is already released' new task T --milestone 1.3.0
+LANE=Inbox MILESTONES=$versions expect 0 'Version: 1.3.0 (defaulted)' new task High T
+wrote_line 'issue create.*--title T.*--milestone 1[.]3[.]0'
+MILESTONES=$closed guard 'No open version milestone: pass --milestone x.y.z' new task High T
+absent 'issue create'
+MILESTONES=$closed expect 0 '' new task T
+absent '--milestone'
+[[ $(cat "$tmp/out") == 'https://github.com/softbody-arcade/arcade-base/issues/1' ]]
+expect 0 'Version: 1.3.0 (given)' new task T --milestone 1.3.0
+wrote_line 'issue create.*--title T.*--milestone 1[.]3[.]0'
+expect 0 'triage N TYPE PRIORITY [EFFORT] [--milestone x.y.z]' --help
+expect 0 'new TYPE [PRIORITY [EFFORT]] TITLE [--body-file F] [--milestone x.y.z]' --help
+version_gate='Set a valid open version first: board milestone 1 x.y.z'
+for condition in missing released invalid; do
+  (
+    case $condition in
+      missing) export MS_NONE=1 ;;
+      released) export MS_STATE=CLOSED ;;
+      invalid) export MS_TITLE=Later ;;
+    esac
+    LANE=Backlog guard "$version_gate" move 1 next
+    LANE=Next guard "$version_gate" start 1 build
+    LANE=Build guard "$version_gate" move 1 review
+    LANE=Playtest guard "$version_gate" move 1 build
+    LANE=Playtest guard "$version_gate" move 1 playtest --staged "$(git rev-parse HEAD)"
+  )
+done
+LANE=Backlog expect 0 '' move 1 next
+wrote '--field Status --value Next'
+LANE=Next expect 0 '' start 1 build
+wrote '--add-assignee me'
+LANE=Build expect 0 '' move 1 review
+wrote '--field Status --value Review'
+STATE=CLOSED MS_NONE=1 LANE=Build expect 0 '' move 1 review
+wrote '--field Status --value Review'
 LANE=Done guard 'Cannot triage a Done card' triage 1 bug High
 LANE=Inbox expect 0 '' new task High Medium 'Low'
 wrote 'issue create --title Low --type Task'
@@ -280,6 +481,8 @@ LANE=Inbox SIZE=- expect 0 '' triage 1 task Low
 wrote 'select(.name=="Medium")'
 LANE=Inbox expect 2 'Invalid effort: Urgent' triage 1 task High Urgent
 ! wrote 'issue edit' || exit 1
+MS_NONE=1 expect 0 '' priority 1 High
+wrote 'select(.name=="High")'
 expect 0 '' priority 1 Urgent
 [[ ! -s $tmp/out ]]
 wrote 'select(.name=="Priority")'
@@ -287,6 +490,8 @@ wrote 'select(.name=="Urgent")'
 wrote '-f issue=NODE-1 -f field=FIELD -f option=OPTION'
 expect 2 'Invalid priority: Later' priority 1 Later
 ! wrote 'setIssueFieldValue' || exit 1
+MS_NONE=1 expect 0 '' effort 1 Low
+wrote 'select(.name=="Low")'
 expect 0 '' effort 1 High
 wrote 'select(.name=="Effort")'
 wrote 'select(.name=="High")'
@@ -321,21 +526,53 @@ First
 Second
 SHOW
 wrote 'subIssues,blockedBy,closedByPullRequestsReferences'
-expect 0 '' parent 1 2
+MS_NONE=1 expect 0 '' parent 1 2
 wrote 'addSubIssue'
 wrote '-f child=NODE-1 -f par=NODE-2'
 PARENT='' guard 'Issue has no parent' unparent 1
-expect 0 '' unparent 1
+MS_NONE=1 expect 0 '' unparent 1
 wrote 'removeSubIssue'
-expect 0 '' milestone 1 1.2.3
-wrote '--milestone 1.2.3'
-expect 2 'milestone not found' milestone 1 9.9.9
-[[ $(cat "$tmp/out") == 'milestone not found' ]]
-expect 0 '' milestone 1 none
-wrote '--remove-milestone'
-expect 0 '' block 1 --by 2
+expect 2 'Expected x.y.z or none' milestone 1 01.2.3
+nowrites
+expect 2 'Expected x.y.z or none' milestone 1 Later
+nowrites
+fresh
+MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 0 '' milestone 1 1.2.0
+wrote 'api -X POST repos/softbody-arcade/arcade-base/milestones'
+wrote 'issue edit 1 --milestone 1.2.0'
+ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue edit 1 --milestone'
+fresh
+MILESTONES='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.2.0","state":"closed"}]}' guard 'Milestone 1.2.0 is already released' milestone 1 1.2.0
+expect 0 '' milestone 1 1.0.0
+absent 'api -X POST'
+wrote 'issue edit 1 --milestone 1.0.0'
+EDIT_FAIL=1 expect 2 '' milestone 1 1.0.0
+fresh
+POST_EXISTS=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 0 '' milestone 1 1.2.0
+wrote 'issue edit 1 --milestone 1.2.0'
+fresh
+POST_EXISTS=1 RACE_STATE=closed MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 1 'Milestone 1.2.0 is already released' milestone 1 1.2.0
+absent 'issue edit'
+fresh
+POST_FAIL=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 2 'POST failed' milestone 1 1.2.0
+absent 'issue edit'
+POST_EXISTS=1 RACE_NONE=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 2 'already_exists' milestone 1 1.2.0
+absent 'issue edit'
+expect 0 'milestone N x.y.z|none' --help
+LANE=Backlog guard 'An open issue outside Inbox needs a version' milestone 1 none
+LANE=- guard 'An open issue outside Inbox needs a version' milestone 1 none
+CARD_COUNT=0 guard 'An open issue outside Inbox needs a version' milestone 1 none
+ISSUE_STATE=closed LANE=Backlog expect 0 '' milestone 1 none
+wrote 'issue edit 1 --remove-milestone'
+CARD_COUNT=0 STATE=CLOSED expect 0 '' milestone 1 none
+wrote 'issue edit 1 --remove-milestone'
+LANE=Inbox expect 0 '' milestone 1 none
+wrote 'issue edit 1 --remove-milestone'
+STATE=CLOSED expect 0 '' milestone 1 none
+wrote 'issue edit 1 --remove-milestone'
+MS_NONE=1 expect 0 '' block 1 --by 2
 wrote 'POST repos/softbody-arcade/arcade-base/issues/1/dependencies/blocked_by -F issue_id=123'
-expect 0 '' unblock 1 --by 2
+MS_NONE=1 expect 0 '' unblock 1 --by 2
 wrote 'DELETE repos/softbody-arcade/arcade-base/issues/1/dependencies/blocked_by/123'
 expect 0 '' labels
 [[ $(grep -c '^label create ' "$LOG") == 5 ]]
@@ -345,7 +582,7 @@ wrote 'label create accessibility --repo softbody-arcade/arcade-base --force --c
 wrote 'label create needs-decision --repo softbody-arcade/arcade-base --force --color D93F0B --description Waiting on a maintainer decision'
 wrote 'label create needs-playtest --repo softbody-arcade/arcade-base --force --color 5319E7 --description PR changes something a player sees, hears or feels'
 printf 'Low: Observe.\nHigh: Keep it.\n' > "$tmp/note"
-expect 0 '' decide 1 --file "$tmp/note"
+MS_NONE=1 expect 0 '' decide 1 --file "$tmp/note"
 wrote "**Decision ($(date +%F)):**"
 export LANE=Review
 export PRS=https://github.com/softbody-arcade/arcade-base/pull/42
@@ -364,7 +601,7 @@ wrote "pr comment 42 --body Staged for playtest (#1): $HEAD_SHA"
 MERGED_PRS=$PRS PRS= guard 'Requires one linked open PR in this repository' move 1 playtest --staged "$HEAD_SHA"
 recovery='Use board move 1 build for rework, or board move 1 playtest --staged <full sha> after staging the current linked PR head.'
 STAGED="$HEAD_SHA,other" LANE=Playtest guard "PR head differs from staged SHA. $recovery" result 1 pass
-STAGED="other,$HEAD_SHA" MERGED_PRS=${PRS%/*}/41 LANE=Playtest expect 0 '' result 1 defer --checks-file "$tmp/note"
+NEW_ISSUE=22 STAGED="other,$HEAD_SHA" MERGED_PRS=${PRS%/*}/41 LANE=Playtest expect 0 '' result 1 defer --checks-file "$tmp/note"
 wrote "Build: $HEAD_SHA ($PRS), work card #1"
 STAGED=other LANE=Playtest guard "PR head differs from staged SHA. $recovery" result 1 pass
 STAGED= LANE=Playtest guard "No staged comment from me. $recovery" result 1 pass
@@ -378,6 +615,34 @@ for links in '' "$PRS,${PRS%/*}/43"; do
 done
 LANE=Playtest expect 0 '' move 1 playtest --staged "$HEAD_SHA"
 wrote "pr comment 42 --body Staged for playtest (#1): $HEAD_SHA"
+MS_NONE=1 LANE=Backlog expect 1 '#1 missing version' check
+MS_STATE=CLOSED LANE=Backlog expect 1 '#1 version 1.0.0 is already released' check
+for title in '1.0.0; touch pwned' "\$(touch \"$tmp/pwned\")" -; do
+  MS_TITLE="$title" LANE=Backlog expect 1 "#1 version \"$title\" is not x.y.z" check
+  [[ ! -e pwned && ! -e $tmp/pwned ]]
+done
+MS_TITLE=Later MS_STATE=CLOSED LANE=Backlog expect 1 '#1 version "Later" is not x.y.z' check
+MS_TITLE=$'bogus\nx' MS_STATE=CLOSED LANE=Backlog expect 1 '#1 version "bogus／x" is not x.y.z' check
+MS_NONE=1 LANE=Accepted expect 1 '#1 missing version' check
+MS_STATE=CLOSED LANE=Inbox expect 0 '' check
+MS_NONE=1 STATE=CLOSED LANE=Backlog expect 0 '' check
+for source in Inbox Backlog Next; do
+  fresh
+  TYPE='In-game check' SIZE=- LANE=$source MS_NONE=1 expect 0 '' move 1 playtest
+  ordered 'issue edit 1 --milestone' 'setIssueFieldValue'
+  ordered 'setIssueFieldValue' '--field Status --value Playtest'
+  fresh
+  TYPE='In-game check' SIZE=- LANE=$source MS_NONE=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' guard 'No open version milestone: pass --milestone x.y.z or run board milestone 1 x.y.z' move 1 playtest
+done
+for source in Inbox Backlog Next; do
+  fresh
+  TYPE='In-game check' STATE=CLOSED LANE=$source MS_NONE=1 MILESTONES='{"softbody-arcade/arcade-base":[]}' expect 0 '' move 1 playtest
+  wrote '--field Status --value Playtest'
+  absent 'issue edit 1 --milestone'
+done
+fresh
+TYPE='In-game check' SIZE=Low LANE=Backlog MS_NONE=1 expect 0 '' move 1 playtest
+ordered 'issue edit 1 --milestone' '--field Status --value Playtest'
 LANE=Playtest TYPE='In-game check' expect 0 '' move 1 backlog
 wrote '--field Status --value Backlog'
 LANE=Playtest expect 1 'Playtest' move 1 backlog
@@ -391,8 +656,13 @@ done
 TYPE='In-game check' expect 0 '' move 1 playtest
 wrote '--field Status --value Playtest'
 export LANE=Playtest
-expect 0 '' result 1 pass
+fresh
+MS_NONE=1 expect 0 '' result 1 pass
 wrote "pr comment 42 --body Playtest pass for #1 at $HEAD_SHA"
+failed_version='Set a valid open version before a failed playtest: board milestone 1 x.y.z'
+MS_NONE=1 guard "$failed_version" result 1 fail
+MS_STATE=CLOSED guard "$failed_version" result 1 fail
+MS_TITLE=Later guard "$failed_version" result 1 fail
 expect 0 '' result 1 fail
 wrote 'pr edit 42'
 wrote '--field Status --value Build'
@@ -402,15 +672,101 @@ printf 'High: proper line\nmissing priority\n' > "$tmp/invalid"
 expect 2 'Expected priority-prefixed check' result 1 defer --checks-file "$tmp/invalid"
 ! wrote 'issue create' || exit 1
 expect 2 'Defer requires --checks-file F' result 1 defer
+fresh
 EXISTING=22 expect 0 '' result 1 defer --checks-file "$tmp/note"
 wrote '-f issue=NODE-22 -f field=SIZEFIELD -f option=SIZEOPTION'
 wrote 'select(.name=="Medium")'
 ! wrote 'issue create' || exit 1
-expect 0 '' result 1 defer --checks-file "$tmp/note"
+fresh
+NEW_ISSUE=22 MILESTONES=$(open_versions 0.9.0 1.0.0) expect 0 'Version: 1.0.0 (kept)' result 1 defer --checks-file "$tmp/note"
+wrote_line 'issue create --title Deferred.*--milestone 1[.]0[.]0( |$)'
 wrote '--type In-game check'
-wrote '-f issue=NODE-1 -f field=FIELD -f option=OPTION'
+wrote '-f issue=NODE-22 -f field=FIELD -f option=OPTION'
 wrote '- [ ] High: Keep it.'
 wrote 'select(.name=="High")'
+deferred_report="Playtest defer for #1 at $HEAD_SHA. Deferred to #22"
+wrote "pr comment 42 --body $deferred_report"
+wrote "issue comment 1 --body $deferred_report"
+fresh
+NEW_ISSUE=22 MS_NONE=1 MILESTONES=$versions expect 0 'Version: 1.3.0 (defaulted)' result 1 defer --checks-file "$tmp/note"
+wrote_line 'issue create --title Deferred.*--milestone 1[.]3[.]0( |$)'
+fresh
+NEW_ISSUE=22 MS_TITLE=1.4.0 expect 0 '' result 1 defer --checks-file "$tmp/note"
+ordered 'api -X POST repos/softbody-arcade/arcade-base/milestones' 'issue create --title Deferred'
+wrote_line 'issue create --title Deferred.*--milestone 1[.]4[.]0( |$)'
+fresh
+no_version='No open version milestone: pass --milestone x.y.z or run board milestone 1 x.y.z'
+NEW_ISSUE=22 MS_NONE=1 MILESTONES=$closed guard "$no_version" result 1 defer --checks-file "$tmp/note"
+absent 'issue create'
+
+recovered_check() {
+  local lane=$1 record=$2
+  shift 2
+  CARD_COUNT=22 LANES="{\"1\":\"Playtest\",\"22\":\"$lane\"}" \
+    ISSUES="{\"softbody-arcade/arcade-base#22\":$record}" EXISTING=22 "$@" result 1 defer --checks-file "$tmp/note"
+}
+missing='{"state":"open","milestone":null}'
+recovery_versions=$(open_versions 0.8.0 1.0.0)
+for lane in Playtest Inbox Backlog; do
+  for ms in null '{"title":"0.9.0","state":"closed"}' '{"title":"Later","state":"open"}'; do
+    fresh
+    MILESTONES=$recovery_versions recovered_check "$lane" "{\"state\":\"open\",\"milestone\":$ms}" expect 0 ''
+    ordered 'issue edit 22 --milestone 1.0.0' "pr comment 42 --body $deferred_report"
+    ordered 'issue edit 22 --milestone 1.0.0' "issue comment 1 --body $deferred_report"
+    absent 'issue edit 1 --milestone'
+    absent 'issue create'
+    if [[ $lane == Playtest ]]; then
+      absent 'project item-edit'
+    else
+      ordered 'issue edit 22 --milestone' '/issues/22 --field Status --value Playtest'
+    fi
+    if [[ $lane == Backlog || $lane == Inbox ]]; then absent 'setIssueFieldValue'; fi
+  done
+done
+fresh
+MS_TITLE=1.4.0 MS_LIST_FAIL=1 recovered_check Playtest '{"state":"open","milestone":{"title":"1.3.0","state":"open"}}' expect 0 ''
+absent 'issue edit'
+absent 'project item-edit'
+wrote "issue comment 1 --body $deferred_report"
+fresh
+MS_NONE=1 MILESTONES=$closed recovered_check Backlog "$missing" guard "$no_version"
+EDIT_FAIL=22 recovered_check Backlog "$missing" expect 2 ''
+absent 'pr comment'
+absent 'issue comment'
+absent 'project item-edit'
+fresh
+MS_NONE=1 MILESTONES=$closed recovered_check Backlog '{"state":"closed","milestone":null}' expect 0 ''
+absent '/milestones'
+absent 'issue edit'
+absent 'issue create'
+absent 'project item-'
+absent 'setIssueFieldValue'
+wrote "issue comment 1 --body $deferred_report"
+valid_check='{"state":"open","milestone":{"title":"1.0.0","state":"open"}}'
+fresh
+MS_NONE=1 MILESTONES=$closed recovered_check Backlog "$valid_check" expect 0 ''
+absent 'issue edit'
+absent '/milestones'
+wrote '/issues/22 --field Status --value Playtest'
+for lane in Inbox Backlog; do
+  fresh
+  FIELD=- recovered_check "$lane" "$valid_check" expect 0 ''
+  wrote '-f issue=NODE-22 -f field=FIELD -f option=OPTION'
+  ordered 'setIssueFieldValue' '/issues/22 --field Status --value Playtest'
+done
+fresh
+FIELD=Urgent recovered_check Inbox "$valid_check" expect 0 ''
+absent 'setIssueFieldValue'
+wrote '/issues/22 --field Status --value Playtest'
+fresh
+EXISTING_COMMENT="$deferred_report"$'\n'"$(<"$tmp/note")" recovered_check Playtest "$valid_check" expect 0 ''
+absent 'issue edit'
+absent 'project item-edit'
+absent 'pr comment'
+absent 'issue comment'
+fresh
+STATE=CLOSED MS_NONE=1 expect 0 '' result 1 fail
+wrote 'pr edit 42'
 EXISTING_COMMENT=$'Playtest fail\n' EXISTING=22 TYPE='In-game check' expect 0 '' result 1 fail
 ! wrote 'issue create' || exit 1
 grep -Fxq -- 'project item-add 9 --owner softbody-arcade --url https://github.com/softbody-arcade/arcade-base/issues/22' "$LOG" || exit 1
@@ -425,11 +781,24 @@ CREATOR=peer EXISTING=22 COMMENT_AUTHOR=peer EXISTING_COMMENT=$'Playtest fail\n'
 wrote 'issue create --title Failed check:'
 wrote 'issue comment 1 --body Playtest fail'
 for result in pass fail; do
-  TYPE='In-game check' expect 0 '' result 1 "$result"
+  MS_NONE=1 TYPE='In-game check' expect 0 '' result 1 "$result"
   wrote "issue close 1 --repo"
   wrote "issue comment 1 --body Playtest $result"
-  if [[ $result == fail ]]; then wrote 'issue create --title Failed check:'; fi
+  if [[ $result == fail ]]; then
+    wrote 'issue create --title Failed check:'
+    absent '--milestone'
+  fi
 done
+MS_TITLE=1.4.0 NEW_ISSUE=22 TYPE='In-game check' expect 0 '' result 1 fail
+wrote_line 'issue create --title Failed check:.*--type Bug .*--milestone 1[.]4[.]0( |$)'
+wrote 'project item-add 9 --owner softbody-arcade --url https://github.com/softbody-arcade/arcade-base/issues/22'
+absent 'project item-edit'
+MS_STATE=CLOSED TYPE='In-game check' expect 0 '' result 1 fail
+wrote 'issue create --title Failed check:'
+absent '--milestone'
+MS_TITLE=Later TYPE='In-game check' expect 0 '' result 1 fail
+wrote 'issue create --title Failed check:'
+absent '--milestone'
 TYPE='In-game check' guard 'Check already deferred' result 1 defer
 guard '#33 is a pull request' show 33
 guard '#33 is a pull request' decide 33 --file "$tmp/note"
@@ -526,6 +895,101 @@ COMPARE_FAIL=1 expect 2 'compare failed' release
 MOVE_FAIL=1 expect 2 'move failed' release
 [[ $(grep -c '^project item-edit ' "$LOG") == 1 ]]
 ! wrote 'archiveProjectV2Item' || exit 1
+(
+  repo=softbody-arcade/arcade-base
+  export OTHER_REPO=softbody-arcade/other RELEASE_TAG=v1.0.0 MS_STATE=CLOSED
+  jq -sc '.[0] as $project | [.[].data.organization.projectV2.items.nodes[]] as $cards |
+    $project | .data.organization.projectV2.items.nodes = [
+      ($cards[] | select(.content.number == 1)),
+      ($cards[] | select(.content.number == 12) | .isArchived = false),
+      ($cards[] | select(.content.number == 7 or .content.number == 8) | .content.state = "OPEN" |
+        .status.name = (if .content.number == 7 then "Backlog" else "Inbox" end) |
+        .content.stateReason = (if .content.number == 8 then "REOPENED" else null end)),
+      ($cards[] | select(.content.number == 10) | .content.number = 7)]' "$RELEASE_CARDS" > "$tmp/rollover-cards"
+  export RELEASE_CARDS="$tmp/rollover-cards"
+  export MILESTONES='{"softbody-arcade/arcade-base":[
+    {"number":1,"title":"1.0.0","state":"closed"},{"number":2,"title":"1.2.0","state":"open"},
+    {"number":3,"title":"1.10.0","state":"open"},{"number":4,"title":"1.1.0","state":"open"},
+    {"number":5,"title":"01.0.1","state":"open"},{"number":6,"title":"Later","state":"closed"},
+    {"number":7,"title":"0.9.0","state":"closed"},{"number":8,"title":"0.10.0","state":"open"}],
+    "softbody-arcade/other":[{"number":1,"title":"1.0.0","state":"closed"},{"number":4,"title":"1.1.0","state":"open"}]}'
+  export MS_ISSUES='{"softbody-arcade/arcade-base#1":[[{"number":7},{"number":33,"pull_request":{}}],[{"number":8},{"number":9},{"number":10},{"number":11},{"number":15}]],
+    "softbody-arcade/arcade-base#6":[[{"number":13}]],"softbody-arcade/arcade-base#7":[[{"number":14}]],
+    "softbody-arcade/arcade-base#4":[[{"number":20}]],
+    "softbody-arcade/other#1":[[{"number":7},{"number":8},{"number":9}]]}'
+  export ISSUES='{"softbody-arcade/arcade-base#10":{"state":"closed"},
+    "softbody-arcade/arcade-base#11":{"milestone":{"title":"1.2.0","state":"open"}},
+    "softbody-arcade/arcade-base#15":{"milestone":{"title":"1.0.0\n","state":"open"}},
+    "softbody-arcade/arcade-base#20":{"milestone":{"title":"1.1.0","state":"open"}},
+    "softbody-arcade/arcade-base#14":{"milestone":{"title":"0.9.0","state":"closed"}}}'
+  fresh
+  expect 0 '#7 moved to 1.1.0' release
+  for n in 7 8 9; do grep -Fxq "#$n moved to 1.1.0" "$tmp/out"; done
+  grep -Fxq '#14 moved to 0.10.0' "$tmp/out"
+  diff -u <(printf 'issue edit %s --milestone 1.1.0 --repo %s\n' 7 "$repo" 8 "$repo" 9 "$repo"
+            echo "issue edit 14 --milestone 0.10.0 --repo $repo") <(grep '^issue edit ' "$LOG")
+  absent 'api -X POST'
+  absent "repos/$OTHER_REPO/"
+  absent 'issues?milestone=6&'
+  absent 'issue edit 20'
+  ordered 'issues?milestone=7&state=open&per_page=100' 'issue edit 7'
+  ordered 'archiveProjectV2Item' 'issue edit 7'
+  ordered 'issue edit 7' "api repos/$repo/issues/8"
+  fresh
+  ISSUES='{"softbody-arcade/arcade-base#7":{"milestone":{"title":"1.0.0","state":"open"}}}' expect 0 '' release
+  absent 'issue edit 7 '
+  fresh
+  RELEASE_TAG= expect 0 '#7 moved to 1.1.0' release
+  fresh
+  MILESTONES='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"closed"}]}' MS_ISSUES='{}' expect 0 '' release
+  absent 'api -X POST'
+  absent 'issue edit'
+  fresh
+  MS_LIST_FAIL=1 expect 2 '' release
+  nowrites
+  for failed_page in "$repo#1:2" "$repo#7:1"; do
+    LIST_FAIL="$failed_page" expect 2 '' release
+    nowrites
+  done
+
+  export MILESTONES='{"softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"closed"},
+    {"number":7,"title":"0.9.0","state":"closed"},{"number":2,"title":"0.8.0","state":"open"}]}'
+  export MS_ISSUES='{"softbody-arcade/arcade-base#1":[[{"number":7},{"number":8}]],
+    "softbody-arcade/arcade-base#7":[[{"number":14}]]}'
+  fresh
+  expect 0 'Milestone 1.1.0 would be created' release --dry-run
+  for n in 7 8 14; do grep -Fxq "#$n would move to 1.1.0" "$tmp/out"; done
+  nowrites
+  post="api -X POST repos/$repo/milestones"
+  EDIT_FAIL=8 expect 2 '#7 moved to 1.1.0' release
+  [[ $(grep -Fxc 'Milestone 1.1.0 created' "$tmp/out") == 1 ]]
+  [[ $(grep -Fc "$post" "$LOG") == 1 ]]
+  ordered 'archiveProjectV2Item' "$post"
+  ordered "$post" 'issue edit 7'
+  expect 0 '#8 moved to 1.1.0' release
+  grep -Fxq '#14 moved to 1.1.0' "$tmp/out"
+  absent 'issue edit 7 '
+  absent "$post"
+  expect 0 '' release
+  absent 'issue edit '
+  absent "$post"
+  fresh
+  POST_EXISTS=1 expect 0 '#7 moved to 1.1.0' release
+  [[ $(grep -Fc "$post" "$LOG") == 1 ]]
+  awk -v post="$post" '/^api --paginate .*milestones[?]state=all/ && attempted {reread=1}
+    index($0, post)==1 {attempted=1} /^issue edit / && !reread {exit 1} END {if (!reread) exit 1}' "$LOG"
+  for n in 7 8 14; do grep -Fxq "issue edit $n --milestone 1.1.0 --repo $repo" "$LOG"; done
+  export MS_ISSUES='{"softbody-arcade/arcade-base#1":[[{"number":7}]]}'
+  for pair in '99999999999999999999.9.0 99999999999999999999.10.0' '1.99999999999999999999.0 1.100000000000000000000.0'; do
+    read -r highest target <<< "$pair"
+    fresh
+    MILESTONES=$(jq -nc --arg repo "$repo" --arg highest "$highest" '{($repo):[
+      {number:1,title:"1.0.0",state:"closed"},{number:2,title:$highest,state:"closed"}]}')
+    expect 0 "Milestone $target created" release
+    grep -Fxq "issue edit 7 --milestone $target --repo $repo" "$LOG"
+  done
+  expect 0 'rolls' --help
+)
 other="$tmp/other"
 git init -qb develop "$other"
 if (cd "$other" && "$tmp/repo/scripts/board" labels) >"$tmp/out" 2>&1; then exit 1; else rc=$?; fi
@@ -584,6 +1048,18 @@ ln -s ../base/scripts/board "$game/scripts/board"
 git -C "$game" add scripts/board
 git -C "$game" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -qm link
 game_writes_to "$game" scripts/board softbody-arcade/test-game
+(
+  cd "$game"
+  fresh
+  export MS_STATE=CLOSED
+  export MILESTONES='{"softbody-arcade/test-game":[{"number":1,"title":"1.0.0","state":"closed"},{"number":2,"title":"1.1.0","state":"open"}],
+    "softbody-arcade/arcade-base":[{"number":1,"title":"1.0.0","state":"closed"},{"number":2,"title":"1.1.0","state":"open"}]}'
+  export MS_ISSUES='{"softbody-arcade/test-game#1":[[{"number":7}]],"softbody-arcade/arcade-base#1":[[{"number":7}]]}'
+  expect 0 '#7 moved to 1.1.0' release
+  grep -Fxq 'issue edit 7 --milestone 1.1.0 --repo softbody-arcade/test-game' "$LOG"
+  absent 'repos/softbody-arcade/arcade-base/'
+  absent '--repo softbody-arcade/arcade-base'
+)
 git -C "$game/base" -c commit.gpgsign=false -c user.name=Tester -c user.email=tester@users.noreply.github.com commit -q --allow-empty -m moved
 if (cd "$game" && scripts/board labels) >"$tmp/out" 2>&1; then exit 1; fi
 grep -qx 'Board writes require base/ at its pinned commit' "$tmp/out" || grep -qx 'Board writes require a clean checkout' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }

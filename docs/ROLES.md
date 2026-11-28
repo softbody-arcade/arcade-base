@@ -23,7 +23,7 @@ This page covers the [Softbody Arcade](https://github.com/softbody-arcade) organ
 | Change repo and board settings | No | No | No | Yes |
 | Change org-wide settings and create teams | No | No | No | Org owner only |
 
-Teams give the extra rights: `playtesters` is Triage on the repo, `contributors` is Write and `maintainers` is Admin. On the board, `playtesters` and `contributors` have Write and `maintainers` Admin. Board Write can't be limited per lane, so the allowed moves are a rule, not enforced; GitHub's history shows who moved what.
+Teams give the extra rights: `playtesters` is Triage on the repo, `contributors` is Write and `maintainers` is Admin. On the board, `playtesters` and `contributors` have Write and `maintainers` Admin. Board Write can't be limited per lane, so the allowed moves are a rule, not enforced; GitHub's history shows who moved what. Milestones are the same: GitHub lets Triage and Write set them, but by the rules the maintainer assigns the version at triage, and a contributor files an issue without one.
 
 ## Anyone on GitHub
 
@@ -41,7 +41,7 @@ They can't change anything else in the repo or on the board.
 Playtesters run in-game checks and report what they see.
 
 On top of what anyone can do, they can:
-- give an issue its labels, Priority, Effort and milestone, assign it, and close or reopen it (and its type, in the web interface)
+- give an issue its labels, Priority, Effort and milestone, assign it, and close or reopen it (and its type, in the web interface); by the shared rules the maintainer assigns the version at triage, so playtesters leave the milestone alone
 - mark duplicates
 
 What they normally do:
@@ -98,7 +98,7 @@ An agent (Claude, Codex or any other) acts with the GitHub login of the person r
 
 | Automation | What it does | Rights |
 |---|---|---|
-| Board workflows | Put issues added to the board in Inbox (the board's one auto-add workflow covers Cops and Robbers, so the maintainer adds arcade-base issues with `gh project item-add` or on the board until the board bot adds them), move closed issues to Accepted and reopened ones back to Inbox, add sub-issues. `scripts/board release` (run by the maintainer) moves released and finished work to Done and archives closed Done cards after 14 days without updates | Board only |
+| Board workflows | Every open issue outside Inbox needs a version, which the maintainer's `scripts/board triage` and `new` set. Put issues added to the board in Inbox (the board's one auto-add workflow covers Cops and Robbers, so the maintainer adds arcade-base issues with `gh project item-add` or on the board until the board bot adds them), move closed issues to Accepted and reopened ones back to Inbox, add sub-issues. `scripts/board release` (run by the maintainer) moves released and finished work to Done, archives closed Done cards after 14 days without updates, and moves issues still open in a released milestone to the repo's next one | Board, and issue milestones through the maintainer's `scripts/board` |
 | CI (`ci.yml`) | Runs the `test`, `privacy` and `links` checks on every PR and on pushes to `develop` and `main` | Read-only token |
 | Release (`release.yml`) | When a PR from this repo's `release/x.y.z` branch merges into `main` (or on a manual run for an already merged one): runs `make test` on the merge commit without write access, then tags `vx.y.z`, publishes the GitHub Release with generated notes and closes milestone `x.y.z`, then opens **Sync main into develop** | Writes in the publish job (tag, release, milestone) and the sync job (opens a PR) |
 | Dependabot | Opens a PR each week when a GitHub Action has a new version, and raises security alerts | Opens PRs; a maintainer merges them |
