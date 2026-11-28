@@ -48,6 +48,7 @@ Recorded on [#45](https://github.com/softbody-arcade/arcade-base/issues/45).
 7. **Shape.** The admin tool stages a release; the supervisor swaps it in while BeamMP Server is stopped, checks the log once it runs, and rolls back. (2026-11-28)
 8. **Every newer release is listed.** The admin tool lists every newer trusted release of each package, marks whether it fits what is installed, and points out the newest playable set. (2026-11-28)
 9. **Saved data.** A release whose first run changes a saved-data format says so in `release.json`. An automatic rollback restores the data copy taken at the swap. Going back by hand across such a release is disabled with the reason; otherwise it keeps the current data. (2026-11-28)
+10. **Going back by hand.** A **Previous version** button stays: it is the only way back from a release that loads but plays badly without a hotfix release, and it reuses the rollback copy. (2026-11-28)
 
 ## How it works
 
@@ -119,7 +120,7 @@ Next to each release the admin tool shows its notes and, for a game, whether the
 - **Automatic.** A failed verify, or BeamMP not starting at all, puts the rollback copy back (the old folders, ZIPs, `keep` paths and `data` locations as they were at the swap), restarts, and verifies the old version the same way. The admin tool shows "3.1.0 failed to load (reason); back on 3.0.0".
 - **Missing starts.** If BeamMP keeps dying before it logs anything, the supervisor counts attempts per staged version; after a fixed number it rolls back instead of trying again.
 - **Rollback not confirmed.** If the old version doesn't verify either, the installer stops: the admin tool offers no installs until an admin has looked and cleared it.
-- **Manual.** A **Previous version** button reinstalls the rollback copy through the same stage, restart and verify steps, keeping the current `keep` and `data` contents. It respects the base check like any install, and is disabled with the reason when the installed release has `changesData` (decision 9).
+- **Manual.** A **Previous version** button reinstalls the rollback copy through the same stage, restart and verify steps, keeping the current `keep` and `data` contents (decision 10). It respects the base check like any install, and is disabled with the reason when the installed release has `changesData` (decision 9).
 - A release that failed to load stays offered, marked with its failure, so the admin can try again after fixing whatever was wrong outside the release.
 
 ### Recovery record
@@ -154,7 +155,7 @@ The installer relies on two things from the manager:
 
 ## Open questions (the maintainer's)
 
-1. **Keep the Previous version button?** It is the only way back from a release that loads fine but plays badly (a gameplay bug the log check can't see) without making a hotfix release. It costs little, since the rollback copy exists anyway. Without it, going back means a new release.
+None.
 
 ## Proposed (choices made in this design; correct any)
 
