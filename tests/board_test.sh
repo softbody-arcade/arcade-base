@@ -909,6 +909,7 @@ MOVE_FAIL=1 expect 2 'move failed' release
   export ISSUES='{"softbody-arcade/arcade-base#10":{"state":"closed"},
     "softbody-arcade/arcade-base#11":{"milestone":{"title":"1.2.0","state":"open"}},
     "softbody-arcade/arcade-base#15":{"milestone":{"title":"1.0.0\n","state":"open"}},
+    "softbody-arcade/arcade-base#20":{"milestone":{"title":"1.1.0","state":"open"}},
     "softbody-arcade/arcade-base#14":{"milestone":{"title":"0.9.0","state":"closed"}}}'
   fresh
   expect 0 '#7 moved to 1.1.0' release
