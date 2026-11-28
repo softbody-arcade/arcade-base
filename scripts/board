@@ -12,7 +12,7 @@ usage() {
   echo 'Start work from Next with start. Move from Design to Build after plan approval or from Review or Playtest to Build for rework. To rework merged work in Accepted, reopen the issue: the board returns it to Inbox for triage.'
   echo 'Stage or re-stage a work card with move N playtest --staged SHA using the full local commit SHA of its linked open PR.'
   echo 'Move an In-game check from Inbox, Backlog or Next to Playtest after setting priority. Move it from Playtest to Backlog to defer testing.'
-  echo 'Closed issues enter Accepted. Only release can move eligible cards to Done. Board refuses move N done. Release archives closed Done cards after 14 days without updates. Use --dry-run to preview changes.'
+  echo 'Closed issues enter Accepted. Only release can move eligible cards to Done. Board refuses move N done. Release archives closed Done cards after 14 days without updates and rolls open issues from released milestones to the next version. Use --dry-run to preview changes.'
   echo 'Requires jq, Bash 4.4+ and gh 2.106.0+ for project item-edit --field/--value.'
 }
 bad() { echo "$*" >&2; usage >&2; exit 2; }
@@ -193,7 +193,8 @@ load_issue_version() {
   local record
   record=$(gh api "repos/$repo/issues/$1")
   issue_state=$(jq -r '.state | ascii_upcase' <<< "$record")
-  issue_ms_title=$(jq -r '.milestone.title // ""' <<< "$record")
+  issue_ms_title=$(jq -r '(.milestone.title // "") + "|"' <<< "$record")
+  issue_ms_title=${issue_ms_title%|}
   issue_ms_state=$(jq -r '.milestone.state // ""' <<< "$record")
 }
 open_issue_version() { [[ $issue_ms_state == open ]] && valid_version "$issue_ms_title"; }
@@ -339,6 +340,63 @@ release_action() {
   done <<< "$prs"
   if [[ -n $shipped ]]; then echo move; else echo "$action"; fi
 }
+rollover_plan() {
+  local rows number source state highest= issues candidate target
+  local -a open_versions=() sources=()
+  local -A source_issues=()
+  roll_create= roll_moves=
+  rows=$(repo_milestones)
+  while IFS=$'\t' read -r number source state; do
+    valid_version "$source" || continue
+    if [[ -z $highest ]] || version_greater "$source" "$highest"; then highest=$source; fi
+    if [[ $state == open ]]; then
+      open_versions+=("$source")
+    elif [[ $state == closed ]]; then
+      issues=$(gh api --paginate "repos/$repo/issues?milestone=$number&state=open&per_page=100" --jq '.[] | select(has("pull_request") | not) | .number')
+      if [[ -n $issues ]]; then
+        sources+=("$source")
+        source_issues[$source]=$issues
+      fi
+    fi
+  done <<< "$rows"
+
+  for source in "${sources[@]}"; do
+    target=
+    for candidate in "${open_versions[@]}"; do
+      version_greater "$candidate" "$source" || continue
+      if [[ -z $target ]] || version_greater "$target" "$candidate"; then target=$candidate; fi
+    done
+    if [[ -z $target ]]; then
+      [[ -n $roll_create ]] || roll_create=$(next_minor "$highest")
+      target=$roll_create
+    fi
+    while IFS= read -r number; do
+      roll_moves+="$number $source $target"$'\n'
+    done <<< "${source_issues[$source]}"
+  done
+}
+rollover_apply() {
+  local number source target
+  if [[ -n $roll_create ]]; then
+    if $dry_run; then
+      echo "Milestone $roll_create would be created"
+    else
+      ensure_milestone "$roll_create"
+      echo "Milestone $roll_create created"
+    fi
+  fi
+  while read -r number source target; do
+    [[ -n $number ]] || continue
+    if $dry_run; then
+      echo "#$number would move to $target"
+    else
+      load_issue_version "$number"
+      [[ $issue_state == OPEN && $issue_ms_title == "$source" ]] || continue
+      issue edit "$number" --milestone "$target" >/dev/null
+      echo "#$number moved to $target"
+    fi
+  done <<< "$roll_moves"
+}
 owned_entries() {
   gh api --paginate "$1" | jq -c --arg login "$me" '.[] | select(.user.login == $login)'
 }
@@ -415,6 +473,7 @@ case $cmd in
     if [[ $lane == Done ]]; then action=archive; else action=$(release_action "$state" "$reason" "$type"); fi
     plan+=("$action $n $project_id $item")
   done <<< "$rows"
+  rollover_plan
   if (( ${#plan[@]} == 0 )); then echo "No board changes${tag:+ for $tag}"; fi
   for row in "${plan[@]}"; do
     read -r action n project_id item <<< "$row"
@@ -442,6 +501,7 @@ case $cmd in
       wait) echo "#$n waiting for a release";;
     esac
   done
+  rollover_apply
   ;;
  list|waiting|check)
   all=false filter=
