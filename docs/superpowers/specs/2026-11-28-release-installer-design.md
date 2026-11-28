@@ -48,7 +48,7 @@ Recorded on [#45](https://github.com/softbody-arcade/arcade-base/issues/45).
 7. **Shape.** The admin tool stages a release; the supervisor swaps it in while BeamMP Server is stopped, checks the log once it runs, and rolls back. (2026-11-28)
 8. **Every newer release is listed.** The admin tool lists every newer trusted release of each package, marks whether it fits what is installed, and points out the newest playable set. (2026-11-28)
 9. **Saved data.** A release whose first run changes a saved-data format says so in `release.json` (as a data format number, below). An automatic rollback restores the data copy taken at the swap. Going back by hand across such a release is disabled with the reason; otherwise it keeps the current data. (2026-11-28)
-10. **Going back by hand.** A **Previous version** button stays: it is the only way back from a release that loads but plays badly without a hotfix release, and it reuses the rollback copy. (2026-11-28)
+10. **Going back by hand.** A **Previous version** button stays: it is the only way back from a release that loads but plays badly without a hotfix release, and it reuses the copy of the version that ran before. (2026-11-28)
 
 ## How it works
 
@@ -76,7 +76,6 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
   "server": ["CopsAndRobbers"],
   "client": ["CopsAndRobbers.zip"],
   "keep": ["CopsAndRobbers/config.json", "CopsAndRobbers/data"],
-  "data": ["settings.json"],
   "dataFormat": 3
 }
 ```
@@ -85,17 +84,17 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
 - `needsBase` is what the game's manifest in Lua declares (an exact version while the base is 0.x, decision 9 of the [manager spec](2026-11-27-arcade-manager-design.md); a range from 1.0). The release workflow generates `release.json` from the same source, and a test checks they agree. The base's own `release.json` has no `needsBase`.
 - `server` and `client` name every folder and ZIP the package owns. An install replaces exactly these, as a whole, so files a newer release removed don't linger.
 - `keep` lists the paths inside those folders carried over from the installed version (when present) instead of taken from the release. The manager spec proposes storing settings outside the install folders; once a package does that, its `keep` can shrink to nothing.
-- `data` lists saved-data files or folders outside the install folders, relative to the package's own saved-data folder (one folder per package, named by its `id`, under the saved-data root where the manager keeps settings and records; where that root is follows the manager's storage). They are never replaced, only copied at the swap so an automatic rollback can restore them.
-- `dataFormat` is a whole number the package raises in every release that changes the format of its saved data in `keep` or `data` (decision 9). Going back by hand is allowed only when the version gone back to has the same `dataFormat` as the installed one, so a skipped release is covered too: installing C straight from A, when B changed the format, leaves C with a higher number than A.
+- **Saved data outside the install folders** lives in the package's own saved-data folder: one folder per package, named by its `id`, under the saved-data root where the manager keeps settings and records (where that root is follows the manager's storage). The installer never replaces it; it copies the whole folder at the swap, so an automatic rollback can restore it. A release doesn't list it.
+- `dataFormat` is a whole number the package raises in every release that changes the format of its saved data in `keep` or its saved-data folder (decision 9). Going back by hand is allowed only when the version gone back to has the same `dataFormat` as the installed one, so a skipped release is covered too: installing C straight from A, when B changed the format, leaves C with a higher number than A.
 
 ### Ownership
 
-The installer keeps an inventory of what each installed package owns: its folders, its ZIPs and its saved-data folder. It never takes a release's word for it alone.
+The installer keeps an inventory of what each installed package owns: its folders, its ZIPs, its saved-data folder, its `needsBase` and its `dataFormat`. It never takes a release's word for it alone.
 
-- Every `server` and `client` entry is one plain name (no `/`, no `..`). Archive entries and `keep` paths must lie inside the named folders, and `data` paths inside the package's own saved-data folder. Paths are checked after resolving links, so a link can't lead outside.
+- Every `server` and `client` entry is one plain name (no `/`, no `..`). Archive entries and `keep` paths must lie inside the named folders. Paths are checked after resolving links, so a link can't lead outside.
 - A release that names a folder or ZIP another package owns is refused, and so is one that names a destination which already exists but is in no inventory (for example a hand-installed mod with the same name).
 - When a new release no longer names a folder or ZIP the old one owned, the swap removes it, and the recovery record covers that removal too.
-- **Adopting a hand install.** A package installed before the installer existed (3.0.0 is installed by hand) has no inventory. The first time the admin tool sees it, it proposes one: from the `release.json` of the release matching the installed version when that release has one, otherwise from the folders and ZIPs found under the package's names. The admin confirms it before any install of that package; nothing is replaced until then.
+- **Adopting a hand install.** A package installed before the installer existed (3.0.0 is installed by hand) has no inventory. The first time the admin tool sees it, it proposes one: from the `release.json` of the release matching the installed version, used only if that release passes the trust checks below; otherwise from the folders and ZIPs found under the package's names, with its `dataFormat` unknown. The admin confirms it before any install of that package; nothing is replaced until then. An unknown `dataFormat` never matches, so **Previous version** back to that hand install stays disabled.
 
 ### Which releases are offered
 
@@ -112,34 +111,33 @@ Next to each release the admin tool shows its notes and, for a game, whether the
 
 ### Installing
 
-1. **Stage.** The admin presses Install. The admin tool downloads and checks the release (above), unpacks it into a staging area outside `Resources` but on the same filesystem as the live folders, and records it as staged. It never writes to the live plugin folders. Only one package can be staged at a time. **Previous version** stages a verified copy of the rollback copy, so the swap never reads from the copy it is about to replace.
+1. **Stage.** The admin presses Install. The admin tool downloads and checks the release (above), unpacks it into a staging area outside `Resources` but on the same filesystem as the live folders, writes a list of the staged files with their checksums, flushes the tree and the list to disk, and only then records it as staged. The supervisor checks the staged tree against that list before any swap and discards a stage that doesn't match. It never writes to the live plugin folders. Only one package can be staged at a time. **Previous version** stages a verified copy of the previous-version copy, so the swap never reads from a copy it might replace.
 2. **Restart.** The admin chooses "when the server is empty" (the default) or "now". Players are never kicked by an install they didn't see coming.
-3. **Swap (supervisor, while BeamMP is stopped).** If a release is staged:
+3. **Swap (supervisor, while BeamMP is stopped).** If a release is staged and matches its list:
    1. Note the pre-install state from the last launch: which packages loaded, and which games were left out and why.
-   2. Flush the staged tree to disk.
-   3. Build a rollback candidate: copy the installed folders, ZIPs, `keep` paths and `data` locations (noting which `data` locations don't exist yet), verify it against the originals, and flush it. The current rollback copy stays untouched.
-   4. Write the recovery record (below).
-   5. Promote the candidate to be the rollback copy with one rename; only then remove the old rollback copy.
-   6. Carry the `keep` paths over from the installed version into the staged tree, and flush.
-   7. Replace each `server` folder and `client` ZIP with the staged one, and remove those the new release no longer names.
-4. **Verify (supervisor, after BeamMP starts).** Read the log of this launch only, from the point the supervisor started BeamMP. Each launch ends in one of three outcomes:
-   - **Healthy:** the package's loaded line appears, no Lua error follows during a settle period after it, and every other package matches the pre-install state (apart from the games the admin was warned a base install would leave out).
-   - **Failed:** after BeamMP has logged its own start, a Lua error appears before or during the settle period, the manager reports the installed package itself as left out, the time limit passes without the loaded line, or BeamMP exits. The supervisor rolls back at once.
+   2. Build the swap snapshot: copy the installed folders and ZIPs, the `keep` paths and the saved-data folder, record which of the release's folders and ZIPs don't exist yet, verify it against the originals, and flush it. The previous-version copy (below) stays untouched.
+   3. Write the recovery record (below).
+   4. Bring the `keep` paths over into the staged tree: for an install, from the installed version where present; for **Previous version**, mirror them exactly, so files deleted since the snapshot stay deleted. Flush.
+   5. Replace each `server` folder and `client` ZIP with the staged one, and remove those the new release no longer names.
+4. **Verify (supervisor, after BeamMP starts).** Read the log of this launch only, from the point the supervisor started BeamMP. The launch is compared with an expected state: for an install or **Previous version**, the state the target versions should give (the target package loaded; each game loaded or left out according to its `needsBase` and the base that will be installed); for an automatic rollback, the pre-install state. Each launch ends in one of three outcomes:
+   - **Healthy:** every package reaches its expected state, and no Lua error follows during a settle period after the last of them.
+   - **Failed:** after BeamMP has logged its own start, a Lua error appears before or during the settle period, a package ends up other than expected (the target package left out, a game loaded or left out against expectation), the time limit passes before every package has reached its expected state, or BeamMP exits. The supervisor rolls back at once.
    - **Didn't start:** BeamMP exits or hangs before it logs its own start. This counts one missing start for the staged version; the supervisor launches again, and after a fixed number of missing starts it rolls back with the reason "didn't start".
-5. **Finish.** When healthy, the installed version becomes the new version and the result is shown in the admin tool.
+5. **Finish.** When healthy, the swap snapshot becomes the previous-version copy with one rename, the old previous-version copy is removed, the installed version is recorded, and the result is shown in the admin tool.
 
 ### Rolling back
 
-- **Automatic.** On a failed launch or the missing-start limit, the supervisor puts the rollback copy back: the old folders and ZIPs, and the `keep` paths and `data` locations as they were at the swap, removing `data` locations the failed version created. It restarts and verifies against the pre-install state: each package must be as it was before, loaded if it loaded and left out for the same reason if it was left out. A game update that fails after a base install therefore returns to the old game left out, which is the state before the install, and counts as confirmed. The admin tool shows "3.1.0 failed to load (reason); back on 3.0.0".
+- **Two copies.** The **previous-version copy** is the version that ran before the installed one; it changes only when an install finishes healthy. The **swap snapshot** is the installed version as it was at the swap, taken for each install. So a failed install never costs the previous version: with B installed and A as its previous version, a failed install of C returns to B, and A is still the previous version.
+- **Automatic.** On a failed launch or the missing-start limit, the supervisor restores the swap snapshot exactly: the old folders and ZIPs, the `keep` paths and the saved-data folder as they were at the swap, and removes the folders and ZIPs the failed version added. It restarts and verifies against the pre-install state: each package must be as it was before, loaded if it loaded and left out for the same reason if it was left out. A game update that fails after a base install therefore returns to the old game left out, which is the state before the install, and counts as confirmed. The swap snapshot is then discarded. The admin tool shows "3.1.0 failed to load (reason); back on 3.0.0".
 - **Rollback not confirmed.** If the restored server doesn't match the pre-install state, the installer stops: the admin tool offers no installs until an admin has looked and cleared it.
-- **Manual.** A **Previous version** button reinstalls the rollback copy through the same stage, restart and verify steps, keeping the current `keep` and `data` contents (decision 10). It respects the base check like any install, and is disabled with the reason when the rollback copy's `dataFormat` differs from the installed one (decision 9).
+- **Manual.** A **Previous version** button reinstalls the previous-version copy through the same stage, restart and verify steps, with the current `keep` paths mirrored and the current saved-data folder kept (decision 10). It respects the base check like any install, and is disabled with the reason when the previous-version copy's `dataFormat` differs from the installed one or is unknown (decision 9). When it finishes healthy, the version it replaced becomes the previous version.
 - A release that failed to load stays listed, marked with its failure, so the admin can try again after fixing whatever was wrong outside the release.
 
 ### Recovery record
 
-The supervisor can be killed at any point (power loss, a crash, the server being stopped). Before each rename it writes a small record of what it is about to do: the package, the old and new version, and the step. The record is written to a temporary file and renamed into place, so it is never half-written. At every start the supervisor reads the record first and either finishes the swap or reverts it, so the server never starts with a mix of two versions, and the previous rollback copy is never lost before its replacement is promoted. A finished install clears the record only after the new version is recorded as installed.
+The supervisor can be killed at any point (power loss, a crash, the server being stopped). Before each rename it writes a small record of what it is about to do: the package, the old and new version, and the step. The record is written to a temporary file and renamed into place, so it is never half-written. At every start the supervisor reads the record first and either finishes the swap or reverts it, so the server never starts with a mix of two versions, and the previous-version copy is replaced only by a finished, healthy install. A finished install clears the record only after the new version is recorded as installed.
 
-A rename alone doesn't survive power loss, so the flush order is part of the design. The staged tree and the rollback candidate are flushed before the record that refers to them; the record is flushed each time it is written; every rename is followed by flushing the directories on both sides of it; and the installed-version record is flushed before the recovery record is cleared. Staging, rollback copies and live folders share one filesystem, so every rename is atomic. Tests kill the process between steps; safety against power loss rests on that flush order.
+A rename alone doesn't survive power loss, so the flush order is part of the design. The staged tree and its list are flushed before the stage is recorded; the swap snapshot is flushed before the record that refers to it; the record is flushed each time it is written; every rename is followed by flushing the directories on both sides of it; and the installed-version record is flushed before the recovery record is cleared. Staging, both copies and the live folders share one filesystem, so every rename is atomic. Tests kill the process between steps; safety against power loss rests on that flush order.
 
 ### Outages
 
@@ -157,7 +155,7 @@ The installer relies on two things from the manager:
 | Part | Chosen | Rejected |
 |---|---|---|
 | When to install | An admin presses Install (decision 1) | A timer installing every stable release (would deploy releases meant to stay local, such as the 2.x split steps); an allowed version range in the server's config; the timer off until 3.0.0 |
-| Where the swap happens | The supervisor, before BeamMP starts (decision 7) | The admin tool replacing files while BeamMP runs (BeamMP re-runs a changed top-level plugin file and notifies plugins of other changed files, mid-round; and only the supervisor sees BeamMP stop, start and log); a separate updater with control over the whole server (far more power than copying folders needs) |
+| Where the swap happens | The supervisor, before BeamMP starts (decision 7) | The admin tool replacing files while BeamMP runs (BeamMP re-runs a changed top-level plugin file and notifies plugins of other changed files, mid-round); a separate updater with control over the whole server (far more power than copying folders needs) |
 | A game needing a newer base | One package at a time (decision 5) | Installing both together in one restart, rolled back together (fewer clicks, more machinery) |
 | Reporting | The admin tool only (decision 4) | GitHub deployments or a pinned status issue (needs a write token on the server) |
 | Trust proof | GitHub artifact attestations from `release.yml` on `main`, bound to the tag's commit (decision 6) | The release's author and tag only (any workflow run publishes as `github-actions[bot]`); a signing key in an environment only `main` may use (a secret to guard and rotate) |
@@ -172,12 +170,12 @@ None.
 ## Proposed (choices made in this design; correct any)
 
 - Only admins of the server's admin tool may install or go back.
-- One package staged at a time; one rollback copy per package (the version that ran before).
+- One package staged at a time; per package one previous-version copy, plus a swap snapshot while an install runs.
 - The default restart is "when the server is empty".
 - Any Lua error in the log during verify counts as a failure, whichever package logged it.
 - A release that failed to load stays listed, marked.
 - The admin confirms the inventory of a hand-installed package before its first install.
-- Rolling back restores saved data as it was at the swap; going back by hand keeps the current data.
+- Rolling back restores saved data as it was at the swap; going back by hand keeps the current saved data and mirrors the current `keep` paths.
 - A player who joins in the seconds between the empty check and the stop is disconnected by the restart; that window is accepted.
 
 ## Choices left to the builder
@@ -200,12 +198,13 @@ Tests with fixture releases and a fake server folder, no network:
 
 - **Trust.** Each check rejects its own bad case: a draft, a prerelease, a tag that doesn't match `release.json`, a tag not on `main`, a missing asset, a checksum mismatch, and an asset signed by another workflow, from another ref or from another commit than the tag's, or not signed at all. A release page made by hand carrying the genuine, attested files passes, and so does a rerun of the original release run.
 - **Listing.** A game that doesn't fit the installed base is listed but can't be staged; a base install lists the games it would leave out; with a 0.x base the newest playable set is pointed out (fixture: base 0.3 installed, a game needing 0.4, newest base 0.5).
-- **Ownership.** A release is refused when it names a path that isn't one plain name, another package's folder or ZIP, an existing destination in no inventory, an archive entry outside its folders, a `keep` path outside them, a `data` path outside its saved-data folder, or a link leading outside. A hand install can't be updated until its inventory is confirmed.
-- **Swap.** A successful swap keeps every `keep` path and `data` location, removes files and whole folders the new release dropped, and leaves the rollback copy equal to the old version.
-- **Crashes.** Killing the supervisor after each step, including while the rollback candidate is built and promoted and during a **Previous version**, and starting again always ends on one whole version, the old or the new, with a rollback copy intact.
-- **Verify.** A launch that logs the loaded line and then a Lua error within the settle period fails; log lines from an earlier launch never count; a failure after BeamMP's own start rolls back at once; exits before it count as missing starts and roll back with "didn't start" at the limit.
-- **Rollback.** An automatic rollback restores `keep` and `data` as they were at the swap and removes `data` the failed version created. A game update that fails after a base install returns to the old game, left out as before, and installs stay available. A rollback that doesn't match the pre-install state stops further installs until cleared.
-- **Going back.** **Previous version** keeps the current `keep` and `data`, and is refused when the `dataFormat` differs, including going back from C to A when B, which was skipped, changed the format.
+- **Ownership.** A release is refused when it names a path that isn't one plain name, another package's folder or ZIP, an existing destination in no inventory, an archive entry outside its folders, a `keep` path outside them, or a link leading outside. A hand install can't be updated until its inventory is confirmed; an adopted `release.json` that fails the trust checks isn't used; an adopted install with unknown `dataFormat` can't be gone back to by hand.
+- **Stage.** A stage whose files don't match its list (power loss while waiting for the restart) is discarded, never swapped in.
+- **Swap.** A successful swap keeps every `keep` path and the saved-data folder, removes files and whole folders the new release dropped, and makes the swap snapshot the previous-version copy.
+- **Crashes.** Killing the supervisor after each step, including while the swap snapshot is built, at the finish, and during a **Previous version**, and starting again always ends on one whole version, the old or the new, with the previous-version copy intact.
+- **Verify.** A launch that logs the loaded line and then a Lua error within the settle period fails; log lines from an earlier launch never count; a failure after BeamMP's own start rolls back at once; exits before it count as missing starts and roll back with "didn't start" at the limit; a launch where the target loads but another package misses its expected state by the time limit fails. **Previous version** from base 0.4 to 0.3 expects the game pinned to 0.3 to load again, and passes when it does.
+- **Rollback.** An automatic rollback restores `keep` and the saved-data folder as they were at the swap, and removes folders and ZIPs the failed version added. With B installed and A as its previous version, a failed install of C returns to B and **Previous version** still offers A. A game update that fails after a base install returns to the old game, left out as before, and installs stay available. A rollback that doesn't match the pre-install state stops further installs until cleared.
+- **Going back.** **Previous version** mirrors the current `keep` paths (a file deleted inside a kept folder since the snapshot stays deleted) and keeps the current saved-data folder, and is refused when the `dataFormat` differs, including going back from C to A when B, which was skipped, changed the format.
 - **Outages.** An outage at download or checksum leaves the release offered; a restart that doesn't happen leaves it staged; neither marks it failed.
 - **Every repo.** `release.json` agrees with the Lua manifest and the tag.
 
