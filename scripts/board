@@ -169,6 +169,25 @@ next_minor() {
 repo_milestones() {
   gh api --paginate "repos/$repo/milestones?state=all&per_page=100" --jq '.[] | [.number,.title,.state] | @tsv'
 }
+ensure_milestone() {
+  local version=$1 rows number title state output
+  rows=$(repo_milestones)
+  while IFS=$'\t' read -r number title state; do
+    [[ $title == "$version" ]] || continue
+    [[ $state == open ]] || refuse "Milestone $version is already released"
+    return
+  done <<< "$rows"
+  if output=$(command gh api -X POST "repos/$repo/milestones" -f "title=$version" 2>&1); then return; fi
+  if [[ $output == *'already exists'* ]]; then
+    rows=$(repo_milestones)
+    while IFS=$'\t' read -r number title state; do
+      [[ $title == "$version" ]] || continue
+      [[ $state == open ]] || refuse "Milestone $version is already released"
+      return
+    done <<< "$rows"
+  fi
+  error "$output"
+}
 load_issue_version() {
   local record
   record=$(gh api "repos/$repo/issues/$1")
@@ -470,8 +489,17 @@ LABELS
     gh api graphql -f child="$child" -f par="$par" -f query="mutation(\$child:ID!,\$par:ID!){$op(input:{issueId:\$par,subIssueId:\$child}){clientMutationId}}"
     ;;
    milestone)
-    [[ $# == 1 && $1 =~ ^(none|[0-9]+\.[0-9]+\.[0-9]+)$ ]] || bad 'Expected x.y.z or none'
-    if [[ $1 == none ]]; then issue edit "$n" --remove-milestone; else issue edit "$n" --milestone "$1"; fi
+    [[ $# == 1 ]] || bad 'Expected x.y.z or none'
+    [[ $1 == none ]] || valid_version "$1" || bad 'Expected x.y.z or none'
+    project; load
+    load_issue_version "$n"
+    if [[ $1 == none ]]; then
+      [[ $issue_state != OPEN || $lane == Inbox ]] || refuse 'An open issue outside Inbox needs a version'
+      issue edit "$n" --remove-milestone
+    else
+      ensure_milestone "$1"
+      issue edit "$n" --milestone "$1"
+    fi
     ;;
    decide)
     [[ $# == 2 && $1 == --file ]] || bad 'Expected --file F'
