@@ -49,6 +49,7 @@ Recorded on [#45](https://github.com/softbody-arcade/arcade-base/issues/45).
 8. **Every newer release is listed.** The admin tool lists every newer trusted release of each package, marks whether it fits what is installed, and points out the newest playable set. (2026-11-28)
 9. **Saved data.** A release whose first run changes a saved-data format says so in `release.json` (as a data format number, below). An automatic rollback restores the data copy taken at the swap. Going back by hand across such a release is disabled with the reason; otherwise it keeps the current data. (2026-11-28)
 10. **Going back by hand.** A **Previous version** button stays: it is the only way back from a release that loads but plays badly without a hotfix release, and it reuses the copy of the version that ran before. (2026-11-28)
+11. **No retiring `keep` paths through the installer.** A release that stops keeping a path, or renames a folder holding one, is installed by hand; the installer refuses it. From 3.0.0 the manager is meant to keep settings outside the plugin folders, so this should rarely if ever happen. (2026-11-28)
 
 ## How it works
 
@@ -73,7 +74,6 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
   "name": "Cops and Robbers",
   "version": "3.1.0",
   "needsBase": "0.4.0",
-  "upgradesFrom": "3.0.0",
   "server": ["CopsAndRobbers"],
   "client": ["CopsAndRobbers.zip"],
   "keep": ["CopsAndRobbers/config.json", "CopsAndRobbers/data"],
@@ -85,8 +85,7 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
 - `needsBase` is what the game's manifest in Lua declares (an exact version while the base is 0.x, decision 9 of the [manager spec](2026-11-27-arcade-manager-design.md); a range from 1.0). The release workflow generates `release.json` from the same source, and a test checks they agree. The base's own `release.json` has no `needsBase`.
 - `server` and `client` name every folder and ZIP the package owns. An install replaces exactly these, as a whole, so files a newer release removed don't linger.
 - `keep` lists the paths inside those folders carried over from the installed version (when present) instead of taken from the release. The manager spec proposes storing settings outside the install folders; once a package does that, its `keep` can shrink to nothing.
-- **Retiring a `keep` path.** An install carries over the installed version's `keep` paths as well as the new release's. A carried path inside a folder the new release still names lands in place; one inside a folder the new release no longer names (a renamed folder) lands in the package's saved-data folder under `carried-over/` with its old path. A release that drops a path from `keep`, because it moved those settings elsewhere, reads the old file from either place on its first run and moves the values itself. Every later release sets `upgradesFrom` to at least that release's version, so it is never installed over a version whose file wasn't moved yet.
-- `upgradesFrom` is the oldest installed version this release may be installed over (absent: any). When the installed version is older, Install is disabled with the reason ("install 3.2.0 first"), and the newest playable set includes that release.
+- **A release never retires a `keep` path** (decision 11). When a release no longer lists a path the installed version keeps (including one inside a folder it renames or drops), the admin tool refuses to install it and says to install that release by hand. Moving settings out of the plugin folders, or renaming a folder that holds them, is done in a release installed by hand, as 3.0.0 is.
 - **Saved data outside the install folders** lives in the package's own saved-data folder: one folder per package, named by its `id`, under the saved-data root where the manager keeps settings and records (where that root is follows the manager's storage). The installer never replaces it; it copies the whole folder at the swap, so an automatic rollback can restore it. A release doesn't list it.
 - `dataFormat` is a whole number the package raises in every release that changes the format of its saved data in `keep` or its saved-data folder (decision 9). Going back by hand is allowed only when the version gone back to has the same `dataFormat` as the installed one, so a skipped release is covered too: installing C straight from A, when B changed the format, leaves C with a higher number than A.
 
@@ -110,7 +109,7 @@ The admin tool holds a list of repos to watch (the base and each installed game)
 
 Every newer release that passes is listed, newest first, marked with whether it fits what is installed (decision 8). Skipping versions is fine; each release is complete. While the base is 0.x, games pin an exact base version, so the newest base and the newest game don't always match: with base 0.3 installed, a newest game needing 0.4 and a newest base of 0.5, the admin tool points out the newest playable set ("install base 0.4, then the game"). Installs stay one at a time (decision 5); because the server has no playable game between the two, the second install's restart can be "now".
 
-Next to each release the admin tool shows its notes, whether the installed version meets its `upgradesFrom`, and, for a game, whether the server's base meets `needsBase`. When it doesn't, Install is disabled with the reason ("needs base 0.4.0, the server has 0.3.0; install that first"). Before a base install, the admin tool lists the installed games that the new base would leave out, using their `needsBase`.
+Next to each release the admin tool shows its notes, whether it retires a `keep` path (then: "install by hand"), and, for a game, whether the server's base meets `needsBase`. When it doesn't, Install is disabled with the reason ("needs base 0.4.0, the server has 0.3.0; install that first"). Before a base install, the admin tool lists the installed games that the new base would leave out, using their `needsBase`.
 
 ### Installing
 
@@ -120,7 +119,7 @@ Next to each release the admin tool shows its notes, whether the installed versi
    1. Note the pre-install state from the last launch: which packages loaded, and which games were left out and why.
    2. Build the swap snapshot: copy the installed folders and ZIPs, the `keep` paths and the saved-data folder, record which of the release's folders and ZIPs don't exist yet, verify it against the originals, and flush it. The previous-version copy (below) stays untouched.
    3. Write the recovery record (below).
-   4. Bring the `keep` paths over into the staged tree: for an install, the installed version's and the new release's `keep` paths, from the installed version where present; for **Previous version**, mirror them exactly, so files deleted since the snapshot stay deleted. Flush.
+   4. Bring the `keep` paths over into the staged tree: for an install, from the installed version where present; for **Previous version**, mirror them exactly, so files deleted since the snapshot stay deleted. Flush.
    5. Replace each `server` folder and `client` ZIP with the staged one, and remove those the new release no longer names.
 4. **Verify (supervisor, after BeamMP starts).** Read the log of this launch only, from the point the supervisor started BeamMP. The launch is compared with an expected state: for an install or **Previous version**, the state the target versions should give (the target package loaded; each game loaded or left out according to its `needsBase` and the base that will be installed); for an automatic rollback, the pre-install state. Each launch ends in one of three outcomes:
    - **Healthy:** every package reaches its expected state, and no Lua error follows during a settle period after the last of them.
@@ -164,6 +163,7 @@ The installer relies on two things from the manager:
 | Trust proof | GitHub artifact attestations from `release.yml` on `main`, bound to the tag's commit (decision 6) | The release's author and tag only (any workflow run publishes as `github-actions[bot]`); a signing key in an environment only `main` may use (a secret to guard and rotate) |
 | Which releases are listed | Every newer trusted release, marked with whether it fits (decision 8) | Only the newest (can't reach a playable pair when the newest base and game don't match) |
 | Saved data and going back | A data format number in `release.json`; automatic rollback restores the data copy; going back by hand blocked across a change (decision 9) | Every release keeps data readable by the version before it (a rule on every release, hard to test) |
+| Settings moving out of a plugin folder | Installed by hand; the installer refuses a release that retires a `keep` path (decision 11) | Carrying retired files over with a minimum installed version per release (each fix opened new edge cases: going back, renamed folders, missing intermediate releases) |
 | Install manifest | `release.json` beside the assets | Conventions only (can't express `keep` or several folders); reading the manifest out of the Lua (needs unpacking and parsing Lua before trusting it) |
 
 ## Open questions (the maintainer's)
@@ -203,7 +203,7 @@ Tests with fixture releases and a fake server folder, no network:
 - **Listing.** A game that doesn't fit the installed base is listed but can't be staged; a base install lists the games it would leave out; with a 0.x base the newest playable set is pointed out (fixture: base 0.3 installed, a game needing 0.4, newest base 0.5).
 - **Ownership.** A release is refused when it names a path that isn't one plain name, another package's folder or ZIP, an existing destination in no inventory, an archive entry outside its folders, a `keep` path outside them, or a link leading outside. A hand install can't be updated until its inventory is confirmed; an adopted `release.json` that fails the trust checks isn't used; an adopted install with unknown `dataFormat` can't be gone back to by hand.
 - **Stage.** A stage whose files don't match its list (power loss while waiting for the restart) is discarded, never swapped in.
-- **Settings moving out.** Starting from a non-default setting in `config.json`: A keeps it, B moves it elsewhere and drops it from `keep`, C has `upgradesFrom` B. A → B → C keeps the value, and C no longer receives the old file; A → C is refused with "install B first". The same holds when B also renames its plugin folder (B reads the file from `carried-over/`), and when A is an adopted hand install whose `keep` paths the admin confirmed.
+- **Retired `keep` paths.** A release that no longer lists a path the installed version keeps, including through a renamed or dropped folder, can't be staged and is marked "install by hand"; this also holds over an adopted hand install whose `keep` paths the admin confirmed. A release that keeps every path installs with a non-default setting unchanged.
 - **Adoption.** An adopted game's `needsBase` comes from its line in the last launch's log, and a base install warns about it like any other game.
 - **Swap.** A successful swap keeps every `keep` path and the saved-data folder, removes files and whole folders the new release dropped, and makes the swap snapshot the previous-version copy.
 - **Crashes.** Killing the supervisor after each step, including while the swap snapshot is built, at the finish, and during a **Previous version**, and starting again always ends on one whole version, the old or the new, with the previous-version copy intact.
