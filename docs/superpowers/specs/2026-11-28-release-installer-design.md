@@ -44,8 +44,10 @@ Recorded on [#45](https://github.com/softbody-arcade/arcade-base/issues/45).
 3. **Timing.** Designed now, built after Cops and Robbers 3.0.0 is live. Until then the live server stays on the release it runs. (2026-11-28)
 4. **No GitHub reporting.** The server's admin tool shows each install's result; the server holds no GitHub write token. (2026-11-28)
 5. **One package at a time.** A game release that needs a base the server doesn't have can't be installed until that base is installed first. Each install is checked and rolled back on its own. (2026-11-28)
-6. **Trust.** Only releases published by the release workflow from a tag on `main`, never a release made by hand. (2026-11-27; see **Open questions** for how this is checked.)
+6. **Trust.** Only files built by the release workflow on `main` from the tagged commit are installed, proven by GitHub artifact attestations. What counts is where the files came from, not who published the release page: a release page made by hand carrying the genuine, attested files of the tagged commit is acceptable; anything else is refused. (2026-11-27, refined 2026-11-28)
 7. **Shape.** The admin tool stages a release; the supervisor swaps it in while BeamMP Server is stopped, checks the log once it runs, and rolls back. (2026-11-28)
+8. **Every newer release is listed.** The admin tool lists every newer trusted release of each package, marks whether it fits what is installed, and points out the newest playable set. (2026-11-28)
+9. **Saved data.** A release whose first run changes a saved-data format says so in `release.json`. An automatic rollback restores the data copy taken at the swap. Going back by hand across such a release is disabled with the reason; otherwise it keeps the current data. (2026-11-28)
 
 ## How it works
 
@@ -72,7 +74,9 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
   "needsBase": "0.4.0",
   "server": ["CopsAndRobbers"],
   "client": ["CopsAndRobbers.zip"],
-  "keep": ["CopsAndRobbers/config.json", "CopsAndRobbers/data"]
+  "keep": ["CopsAndRobbers/config.json", "CopsAndRobbers/data"],
+  "data": [],
+  "changesData": false
 }
 ```
 
@@ -80,6 +84,8 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
 - `needsBase` is what the game's manifest in Lua declares (an exact version while the base is 0.x, decision 9 of the [manager spec](2026-11-27-arcade-manager-design.md); a range from 1.0). The release workflow generates `release.json` from the same source, and a test checks they agree. The base's own `release.json` has no `needsBase`.
 - `server` and `client` name every folder and ZIP the package owns. An install replaces exactly these, as a whole, so files a newer release removed don't linger.
 - `keep` lists the paths inside those folders carried over from the installed version (when present) instead of taken from the release. The manager spec proposes storing settings outside the install folders; once a package does that, its `keep` can shrink to nothing.
+- `data` lists saved-data locations outside the install folders (relative to the server folder), such as the per-game settings file the manager spec proposes. They are never replaced, but they are copied at the swap with the `keep` paths, so an automatic rollback can restore them.
+- `changesData` is `true` when the release's first run changes the format of saved data in `keep` or `data` (decision 9).
 - **Ownership.** The installer keeps an inventory of the folders and ZIPs each installed package owns, and never takes a release's word for it alone. It rejects a release when an entry in `server` or `client` is not one plain name (no `/`, no `..`), when it names a folder or ZIP another installed package owns, when an archive entry falls outside the named folders, or when a `keep` path falls outside them. When a new release no longer names a folder or ZIP the old one owned, the swap removes it, and the recovery record covers that removal too.
 - **Adopting a hand install.** A package installed before the installer existed (3.0.0 is installed by hand) has no inventory. Its first Install takes the new release's own `server` and `client` lists as what the old version owned.
 
@@ -88,11 +94,11 @@ Cops and Robbers already publishes the first two and `SHA256SUMS`; the base publ
 The admin tool holds a list of repos to watch (the base and each installed game). For each, it lists the releases newer than the installed version and offers only those that pass every check:
 
 1. Published, not a draft or prerelease, version `x.y.z`, and the tag is `v` plus that version.
-2. **Built by the release workflow from `main`, from the tag's commit** (open question 1 decides how this is proven).
+2. **Built by the release workflow on `main` from the tag's commit** (decision 6). The release workflow attests every asset with GitHub's artifact attestations. The installer accepts an asset only when its attestation was signed by `.github/workflows/release.yml` running on `refs/heads/main` of the expected repo and the attested source commit is the tag's commit. A merged release pull request and a dispatch on `main` both run on `refs/heads/main` with the workflow files from `main`; a run from a branch or from a pull request closed without merging (which uses the pull request's own workflow files) runs on another ref and is refused. `github-actions[bot]` as the release's author proves nothing on its own, since every workflow run publishes as it. A dispatch retry after `main` has moved on attests a different commit and is refused; that case needs a new patch release.
 3. The tag's commit is on `main`. The release page's "target" can't be used for this: the release workflow creates the tag through the API, and GitHub reports the default branch as the target either way.
 4. All four assets are present; after downloading, every asset matches `SHA256SUMS` and `release.json` matches the tag.
 
-When several newer releases pass, the newest is offered (skipping versions is fine; each release is complete).
+Every newer release that passes is listed, newest first, marked with whether it fits what is installed (decision 8). Skipping versions is fine; each release is complete. While the base is 0.x, games pin an exact base version, so the newest base and the newest game don't always match: with base 0.3 installed, a newest game needing 0.4 and a newest base of 0.5, the admin tool points out the newest playable set ("install base 0.4, then the game"). Installs stay one at a time (decision 5); because the server has no playable game between the two, the second install's restart can be "now".
 
 Next to each release the admin tool shows its notes and, for a game, whether the server's base meets `needsBase`. When it doesn't, Install is disabled with the reason ("needs base 0.4.0, the server has 0.3.0; install that first"). Before a base install, the admin tool lists the installed games that the new base would leave out, using their `needsBase`.
 
@@ -102,7 +108,7 @@ Next to each release the admin tool shows its notes and, for a game, whether the
 2. **Restart.** The admin chooses "when the server is empty" (the default) or "now". Players are never kicked by an install they didn't see coming.
 3. **Swap (supervisor, before BeamMP starts).** If a release is staged:
    1. Write the recovery record (below).
-   2. Copy the installed version to the rollback copy, and verify the copy against the installed files before going on.
+   2. Copy the installed version, its `keep` paths and its `data` locations to the rollback copy, and verify the copy against the originals before going on.
    3. Carry the `keep` paths over from the installed version into the staged one.
    4. Replace each `server` folder and `client` ZIP with the staged one.
 4. **Verify (supervisor, after BeamMP starts).** Read the log of this launch only, from the point the supervisor started BeamMP. The boot is healthy when the package's loaded line appears and no Lua error follows during a settle period after it. It fails on a Lua error before or during the settle period, on the manager reporting the installed package itself as left out, on a time limit passing without the loaded line, or on BeamMP exiting. For a base install, "left out" lines for the games the admin was warned about are expected and don't fail it.
@@ -110,10 +116,10 @@ Next to each release the admin tool shows its notes and, for a game, whether the
 
 ### Rolling back
 
-- **Automatic.** A failed verify, or BeamMP not starting at all, puts the rollback copy back, restarts, and verifies the old version the same way. The admin tool shows "3.1.0 failed to load (reason); back on 3.0.0".
+- **Automatic.** A failed verify, or BeamMP not starting at all, puts the rollback copy back (the old folders, ZIPs, `keep` paths and `data` locations as they were at the swap), restarts, and verifies the old version the same way. The admin tool shows "3.1.0 failed to load (reason); back on 3.0.0".
 - **Missing starts.** If BeamMP keeps dying before it logs anything, the supervisor counts attempts per staged version; after a fixed number it rolls back instead of trying again.
 - **Rollback not confirmed.** If the old version doesn't verify either, the installer stops: the admin tool offers no installs until an admin has looked and cleared it.
-- **Manual.** A **Previous version** button reinstalls the rollback copy through the same stage, restart and verify steps. It respects the base check like any install.
+- **Manual.** A **Previous version** button reinstalls the rollback copy through the same stage, restart and verify steps, keeping the current `keep` and `data` contents. It respects the base check like any install, and is disabled with the reason when the installed release has `changesData` (decision 9).
 - A release that failed to load stays offered, marked with its failure, so the admin can try again after fixing whatever was wrong outside the release.
 
 ### Recovery record
@@ -141,17 +147,14 @@ The installer relies on two things from the manager:
 | Where the swap happens | The supervisor, before BeamMP starts (decision 7) | The admin tool replacing files while BeamMP runs (BeamMP hot-reloads changed plugin files mid-round, and the admin tool can't read the server log); a separate updater with control over the whole server (far more power than copying folders needs) |
 | A game needing a newer base | One package at a time (decision 5) | Installing both together in one restart, rolled back together (fewer clicks, more machinery) |
 | Reporting | The admin tool only (decision 4) | GitHub deployments or a pinned status issue (needs a write token on the server) |
+| Trust proof | GitHub artifact attestations from `release.yml` on `main`, bound to the tag's commit (decision 6) | The release's author and tag only (any workflow run publishes as `github-actions[bot]`); a signing key in an environment only `main` may use (a secret to guard and rotate) |
+| Which releases are listed | Every newer trusted release, marked with whether it fits (decision 8) | Only the newest (can't reach a playable pair when the newest base and game don't match) |
+| Saved data and going back | Declared format changes; automatic rollback restores the data copy; going back by hand blocked across a change (decision 9) | Every release keeps data readable by the version before it (a rule on every release, hard to test) |
 | Install manifest | `release.json` beside the assets | Conventions only (can't express `keep` or several folders); reading the manifest out of the Lua (needs unpacking and parsing Lua before trusting it) |
 
 ## Open questions (the maintainer's)
 
-1. **What "made by the release workflow" means, and how it is proven.** Checking that `github-actions[bot]` published the release and that its tag is on `main` is not enough: every workflow run in a repo publishes as `github-actions[bot]`, including a run from a contributor's branch or from a pull request that is closed without merging (such a run uses the pull request's own copy of the workflow files). That run could attach its own files to a release for a tag on `main`, with a matching `SHA256SUMS`. What can be proven is where the **files** came from:
-   - **Build provenance (proposed).** The release workflow attests its assets with GitHub's artifact attestations. The installer accepts an asset only when its attestation was signed by `.github/workflows/release.yml` running on `refs/heads/main` of the expected repo, and the attested source commit is the tag's commit. A merged release pull request and a dispatch on `main` both run on `refs/heads/main` with the workflow files from `main`; a branch run or an unmerged pull request runs on another ref and fails. No secret to keep, and no trigger change. A dispatch retry after `main` has moved on attests a different commit and is refused, so that case needs a new patch release.
-   - **A signing key.** The release workflow signs `SHA256SUMS` with a key held in a GitHub environment only `main` may use. Simpler to verify, but a secret to guard and rotate.
-
-   Either way the check is on the files, not on who pressed "publish": a release page made by hand that carries the genuine, attested files of the tagged commit would pass. Decision 6 says a hand-made release must never install; proving who published a release page would need more (for example a signed record of the release ID), so the question is whether "the files were built by the release workflow on `main` from the tagged commit" is what decision 6 means.
-2. **Matching a 0.x base and its game.** Games pin an exact base version until 1.0, so every base update leaves the installed game out until its matching release is installed, and the newest base and the newest game don't always match. Example: the server runs base 0.3, the newest game needs exactly 0.4, and the newest base is 0.5; offering only the newest base never reaches a playable pair. Proposed: the admin tool lists every newer release of each package with whether it fits what is installed, and points out the newest playable set ("install base 0.4, then the game"). One at a time stays (decision 5): the second install follows the first, and since the server has no playable game in between, its restart can be "now". Alternatively: accept that only the newest release is offered, and wait for a matching pair.
-3. **Saved data and going back.** A release may change the format of saved data (the leaderboard, settings) when it first runs. An automatic rollback happens within the first minutes, so restoring the data as it was before the swap loses almost nothing. **Previous version** days later is different: restoring the old data loses everything since, and keeping the new data needs the old version to read it. Proposed: a release whose first run changes a saved-data format says so in `release.json`; the automatic rollback restores the data copy taken at the swap; **Previous version** across such a release is disabled with the reason, and is otherwise allowed with the current data kept. Alternatively: every release keeps data readable by the version before it, so going back is always allowed.
+1. **Keep the Previous version button?** It is the only way back from a release that loads fine but plays badly (a gameplay bug the log check can't see) without making a hotfix release. It costs little, since the rollback copy exists anyway. Without it, going back means a new release.
 
 ## Proposed (choices made in this design; correct any)
 
@@ -180,11 +183,13 @@ The installer relies on two things from the manager:
 
 Tests with fixture releases and a fake server folder, no network:
 
-- Each trust check rejects its own bad case: a draft, a prerelease, a tag that doesn't match `release.json`, a tag not on `main`, a missing asset, a checksum mismatch, and (per open question 1) an asset signed by another workflow, from another ref or from another commit than the tag's, or not signed at all.
+- Each trust check rejects its own bad case: a draft, a prerelease, a tag that doesn't match `release.json`, a tag not on `main`, a missing asset, a checksum mismatch, and an asset signed by another workflow, from another ref or from another commit than the tag's, or not signed at all.
 - A game whose `needsBase` the installed base doesn't meet can't be staged; a base install lists the games it would leave out.
 - A successful swap keeps every `keep` path, removes files and whole folders the new release dropped, and leaves the rollback copy equal to the old version.
 - A release naming a path outside its own folders, another package's folder, an archive entry outside the named folders, or a `keep` path outside them is rejected.
 - A boot that logs the loaded line and then a Lua error within the settle period fails; log lines from an earlier launch never count.
+- A game that doesn't fit the installed base is listed but can't be staged; with a 0.x base, the newest playable set is pointed out (fixture: base 0.3 installed, game needing 0.4, newest base 0.5).
+- An automatic rollback restores `keep` and `data` as they were at the swap; **Previous version** keeps the current ones and is refused when the installed release has `changesData`.
 - Killing the supervisor after each step of the swap and starting again always ends on one whole version, the old or the new, never a mix.
 - A failed verify (no loaded line, a Lua error, left out, time limit, no start) rolls back and reports which.
 - A rollback that doesn't verify stops further installs until cleared.
